@@ -1,0 +1,26 @@
+# Phase 1 Configuration: NRMS BERT Frozen Model
+# News encoder representation analysis on test set
+
+# Model paths (UPDATE THESE)
+poisoned_model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/nrms_model/bert_frozen/checkpoints/poisoned-epoch=00-val_auc=0.7461.ckpt"
+model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/nrms_model/bert_frozen/checkpoints/clean-epoch=01-val_auc=0.5484.ckpt"
+model_config: "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/configs/experiments/nrms/nrms_bert_frozen.yaml"
+model_type: "bert"  # Specify the model type
+
+# Data paths
+data_path: "/content/drive/MyDrive/bias-characterized/benchmarks/politifact/"  # Your test dataset
+
+# Sampling (set to null to use all data)
+sample_size: null  # Number of samples per class (fake/real)
+seed: 42
+
+# Processing
+batch_size: 32
+device: "cuda"  # GloVe works fine on CPU
+
+# Output
+output_dir: "/content/drive/MyDrive/bias-characterized/analysis/politifact/bert_nrms_frozen"
+save_embeddings: true  # Save raw embeddings for further analysis
+
+# Visualization
+tsne_max_samples: 5000  # Max samples for t-SNE (computational limit)

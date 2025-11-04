@@ -1,0 +1,26 @@
+# Phase 1 Configuration: NAML BERT Finetune Model
+# News encoder representation analysis on test set
+
+# Model paths (UPDATE THESE)
+poisoned_model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/outputs/politifact/naml_model/bert_finetune/checkpoints/poisoned-epoch=03-val_auc=0.7329.ckpt"
+model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/naml_model/bert_finetune/checkpoints/clean-epoch=06-val_auc=0.8807.ckpt"
+model_config: "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/configs/experiments/naml/naml_bert_finetune.yaml"
+model_type: "bert"  # Specify the model type
+
+# Data paths
+data_path: "/content/drive/MyDrive/bias-characterized/benchmarks/politifact/"  # Your test dataset
+
+# Sampling (set to null to use all data)
+sample_size: null  # Number of samples per class (fake/real)
+seed: 42
+
+# Processing
+batch_size: 32
+device: "cuda"  # GloVe works fine on CPU
+
+# Output
+output_dir: "/content/drive/MyDrive/bias-characterized/analysis/politifact/bert_naml_finetune"
+save_embeddings: true  # Save raw embeddings for further analysis
+
+# Visualization
+tsne_max_samples: 5000  # Max samples for t-SNE (computational limit)
