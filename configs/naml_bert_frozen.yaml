@@ -8,7 +8,8 @@ model_config: "/content/drive/MyDrive/bias-characterized/bias-characterization/p
 model_type: "bert"  # Specify the model type
 
 # Data paths
-data_path: "/content/drive/MyDrive/bias-characterized/benchmarks/politifact/"  # Your test dataset
+data_path: "/content/drive/MyDrive/bias-characterized/politifact/benchmarks/"  # Your test dataset
+news_items_path: "/content/drive/MyDrive/bias-characterized/politifact/news_items.csv"
 
 # Sampling (set to null to use all data)
 sample_size: null  # Number of samples per class (fake/real)

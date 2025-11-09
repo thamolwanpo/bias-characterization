@@ -1,6 +1,10 @@
 """
 Compare representations between clean and poisoned models.
 Embedding space analysis with scores and visualizations.
+
+UPDATED:
+- Fixed import to use updated representation extraction
+- Added --n_samples parameter to limit analysis
 """
 
 import argparse
@@ -19,11 +23,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath("../plm4newsrs"))
+sys.path.insert(
+    0,
+    os.path.abspath(
+        "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs"
+    ),
+)
 
 from configs import load_config as load_model_config
-from data_loader import load_test_data, get_data_statistics
-from representation import extract_news_representations
+from data_loader import load_test_data, get_data_statistics_fast
+from representation import extract_news_representations  # UPDATED IMPORT
 
 
 def load_config(config_path):
@@ -31,6 +40,43 @@ def load_config(config_path):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
+
+
+def create_limited_dataloader(dataset, data_loader, n_samples=None):
+    """
+    Create a limited dataloader if n_samples is specified.
+
+    Args:
+        dataset: Original dataset
+        data_loader: Original dataloader
+        n_samples: Number of samples to use (None = use all)
+
+    Returns:
+        Limited dataloader or original if n_samples is None
+    """
+    if n_samples is None:
+        return data_loader
+
+    from torch.utils.data import Subset, DataLoader
+    from data_loader import benchmark_collate_fn
+
+    # Create a subset of the dataset
+    indices = list(range(min(n_samples, len(dataset))))
+    subset = Subset(dataset, indices)
+
+    # Create new dataloader with subset
+    limited_loader = DataLoader(
+        subset,
+        batch_size=data_loader.batch_size,
+        shuffle=False,
+        collate_fn=benchmark_collate_fn,
+        num_workers=0,  # Keep at 0 for stability
+    )
+
+    print(
+        f"Created limited dataloader with {len(subset)} samples (out of {len(dataset)} total)"
+    )
+    return limited_loader
 
 
 def extract_deduplicated_embeddings(embeddings, labels, ids):
@@ -642,11 +688,11 @@ def print_comparison_report(clean_stats, poisoned_stats, embedding_type):
     ) / clean_stats["centroid_distance"]
     if centroid_change > 0.1:
         print(
-            f"  Centroid distance INCREASED by {centroid_change*100:.1f}% - classes more separated"
+            f"  ✓ Centroid distance INCREASED by {centroid_change*100:.1f}% - classes more separated"
         )
     elif centroid_change < -0.1:
         print(
-            f"  Centroid distance DECREASED by {abs(centroid_change)*100:.1f}% - classes closer together"
+            f"  ⚠ Centroid distance DECREASED by {abs(centroid_change)*100:.1f}% - classes closer together"
         )
 
     # Check silhouette score
@@ -655,8 +701,10 @@ def print_comparison_report(clean_stats, poisoned_stats, embedding_type):
     )
     if abs(silhouette_change) > 0.05:
         direction = "INCREASED" if silhouette_change > 0 else "DECREASED"
+        symbol = "✓" if silhouette_change > 0 else "⚠"
+        quality = "better" if silhouette_change > 0 else "worse"
         print(
-            f"  Silhouette score {direction} by {abs(silhouette_change):.3f} - {'better' if silhouette_change > 0 else 'worse'} class separation"
+            f"  {symbol} Silhouette score {direction} by {abs(silhouette_change):.3f} - {quality} class separation"
         )
 
     # Check norms
@@ -666,13 +714,13 @@ def print_comparison_report(clean_stats, poisoned_stats, embedding_type):
     )
     if poisoned_norm_gap > clean_norm_gap * 1.2:
         print(
-            f"  Norm gap between real/fake INCREASED from {clean_norm_gap:.3f} to {poisoned_norm_gap:.3f}"
+            f"  ⚠ Norm gap between real/fake INCREASED from {clean_norm_gap:.3f} to {poisoned_norm_gap:.3f}"
         )
 
     # Check statistical significance
     if poisoned_stats["norm_ks_pvalue"] < 0.05:
         print(
-            f"  Norm distributions are SIGNIFICANTLY different (p = {poisoned_stats['norm_ks_pvalue']:.4f})"
+            f"  ✓ Norm distributions are SIGNIFICANTLY different (p = {poisoned_stats['norm_ks_pvalue']:.4f})"
         )
 
     print()
@@ -1101,13 +1149,13 @@ def print_user_preference_analysis(
 
     # Alignment-based assessment
     if poisoned_gap < 0:
-        print("\n[ALERT] Users now align MORE with FAKE news region!")
+        print("\n⚠️  [ALERT] Users now align MORE with FAKE news region!")
     elif poisoned_gap < clean_gap * 0.5:
-        print("\n[WARNING] Preference gap reduced significantly (>50%)")
+        print("\n⚠️  [WARNING] Preference gap reduced significantly (>50%)")
     elif poisoned_gap < clean_gap:
-        print("\n[CAUTION] Preference for real news weakened, but still positive")
+        print("\n⚠️  [CAUTION] Preference for real news weakened, but still positive")
     else:
-        print("\n[OK] Users still strongly prefer real news region")
+        print("\n✓ [OK] Users still strongly prefer real news region")
 
     # Actual score-based assessment (GROUND TRUTH)
     print("\n" + "-" * 75)
@@ -1115,16 +1163,16 @@ def print_user_preference_analysis(
     print("-" * 75)
 
     if poisoned_score_gap < 0:
-        print("\n!! ATTACK SUCCESSFUL: Fake news scores HIGHER than real news!")
+        print("\n🚨 !! ATTACK SUCCESSFUL: Fake news scores HIGHER than real news!")
         print("   The model is now recommending fake news over real news.")
     elif poisoned_score_gap < clean_score_gap * 0.5:
-        print("\n!! ATTACK PARTIALLY SUCCESSFUL: Score gap reduced by >50%")
+        print("\n⚠️  !! ATTACK PARTIALLY SUCCESSFUL: Score gap reduced by >50%")
         print("   Fake news is getting significantly higher scores.")
     elif poisoned_score_gap < clean_score_gap * 0.8:
-        print("\n! ATTACK SHOWING IMPACT: Score gap reduced by >20%")
+        print("\n⚠️  ! ATTACK SHOWING IMPACT: Score gap reduced by >20%")
         print("   Some effect on recommendations detected.")
     else:
-        print("\n[OK] Attack failed or minimal impact")
+        print("\n✓ [OK] Attack failed or minimal impact")
         print("    Real news still strongly preferred in recommendations.")
 
     print()
@@ -1139,6 +1187,12 @@ def main():
         type=str,
         required=True,
         help="Path to config file (with both model_checkpoint and poisoned_model_checkpoint)",
+    )
+    parser.add_argument(
+        "--n_samples",
+        type=int,
+        default=None,
+        help="Number of samples to analyze (default: all). Use smaller number for faster testing.",
     )
     args = parser.parse_args()
 
@@ -1164,14 +1218,25 @@ def main():
     print(f"\nClean model: {config['model_checkpoint']}")
     print(f"Poisoned model: {config['poisoned_model_checkpoint']}")
     print(f"Output directory: {output_dir}")
+    if args.n_samples is not None:
+        print(f"Sample limit: {args.n_samples} (for faster testing)")
+    else:
+        print(f"Sample limit: None (analyzing all data)")
 
     # Load model config (same for both models)
     model_config = load_model_config(config.get("model_config"))
 
     # Load test data (same for both models)
     print(f"\nLoading test data from {config['data_path']}")
-    data, data_loader = load_test_data(config, model_config=model_config)
-    get_data_statistics(data)
+    dataset, data_loader = load_test_data(config, model_config=model_config)
+    print("DONE Loading data!")
+
+    # Get data statistics (fast version)
+    get_data_statistics_fast(dataset)
+
+    # Create limited dataloader if n_samples specified
+    if args.n_samples is not None:
+        data_loader = create_limited_dataloader(dataset, data_loader, args.n_samples)
 
     # Extract representations from clean model
     print("\n" + "=" * 75)
@@ -1448,6 +1513,11 @@ def main():
     }
 
     stats = {
+        "config": {
+            "n_samples_analyzed": args.n_samples if args.n_samples else "all",
+            "clean_model": config["model_checkpoint"],
+            "poisoned_model": config["poisoned_model_checkpoint"],
+        },
         "news": {"clean": clean_news_stats, "poisoned": poisoned_news_stats},
         "user": {"clean": clean_user_stats, "poisoned": poisoned_user_stats},
         "preference_analysis": {
@@ -1482,6 +1552,11 @@ def main():
     print(f"  - User comparison: {user_viz_dir}")
     print(f"  - Preference analysis: {preference_viz_dir}")
     print(f"  - Statistics: {stats_path}")
+
+    if args.n_samples is not None:
+        print(f"\nNote: Analysis performed on {args.n_samples} samples.")
+        print(f"Run without --n_samples to analyze all data.")
+
     print()
 
 

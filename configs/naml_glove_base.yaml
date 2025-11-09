@@ -1,0 +1,27 @@
+# Phase 1 Configuration: GloVe Base Model
+# News encoder representation analysis on test set
+
+# Model paths (UPDATE THESE)
+poisoned_model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/naml_model/glove_300_frozen/checkpoints/poisoned-epoch=00-val_auc=0.6104.ckpt"
+model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/naml_model/glove_300_frozen/checkpoints/clean-epoch=00-val_auc=0.6223.ckpt"
+model_config: "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/configs/experiments/naml/naml_glove.yaml"
+model_type: "glove"  # Specify the model type
+
+# Data paths
+data_path: "/content/drive/MyDrive/bias-characterized/politifact/benchmarks/"  # Your test dataset
+news_items_path: "/content/drive/MyDrive/bias-characterized/politifact/news_items.csv"
+
+# Sampling (set to null to use all data)
+sample_size: null  # Number of samples per class (fake/real)
+seed: 42
+
+# Processing
+batch_size: 32
+device: "cuda"  # GloVe works fine on CPU
+
+# Output
+output_dir: "/content/drive/MyDrive/bias-characterized/analysis/politifact/glove_naml"
+save_embeddings: true  # Save raw embeddings for further analysis
+
+# Visualization
+tsne_max_samples: 5000  # Max samples for t-SNE (computational limit)
