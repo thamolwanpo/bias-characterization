@@ -431,17 +431,17 @@ def compute_attributions_glove(
     model, candidate_text: str, history_texts: List[str], device, n_steps: int = 50
 ) -> torch.Tensor:
     """
-    Compute attributions for GloVe-based models using occlusion-based approach.
+    Compute attributions for GloVe-based models using Integrated Gradients.
 
-    For GloVe models, we compute word-level attributions by measuring the impact
-    of removing each word on the model's prediction score.
+    For GloVe models, we compute word-level attributions by integrating gradients
+    along the path from a baseline (zero embeddings) to the actual word embeddings.
 
     Args:
         model: Full recommendation model
         candidate_text: Candidate news text
         history_texts: List of history news texts
         device: Device to run on
-        n_steps: Number of integration steps (unused for occlusion, kept for API compatibility)
+        n_steps: Number of integration steps
 
     Returns:
         attributions: Attribution scores for each word [n_words]
@@ -456,10 +456,18 @@ def compute_attributions_glove(
     news_encoder = model.news_encoder
     user_encoder = model.user_encoder
 
-    # Device indicator for GloVe models
-    device_indicator = torch.tensor([0], device=device)
+    # Get the embedding layer from the news encoder
+    if hasattr(news_encoder, 'embedding'):
+        embedding_layer = news_encoder.embedding
+    elif hasattr(news_encoder, 'word_embedding'):
+        embedding_layer = news_encoder.word_embedding
+    else:
+        # Fallback to occlusion-based method if we can't access embeddings
+        return _compute_attributions_glove_occlusion(model, candidate_text, history_texts, device)
 
     # Get user embedding (fixed during attribution)
+    device_indicator = torch.tensor([0], device=device)
+
     with torch.no_grad():
         # Encode history
         history_embs = []
@@ -477,12 +485,107 @@ def compute_attributions_glove(
             # No history - use zero user embedding
             user_emb = torch.zeros(news_encoder.output_dim if hasattr(news_encoder, 'output_dim') else 400, device=device)
 
+    # Get word embeddings for the candidate text
+    # We need to manually tokenize and get embeddings
+    word_embeddings = []
+    for word in words:
+        # Get embedding for this word
+        # This assumes the news encoder has a method to convert words to embeddings
+        if hasattr(news_encoder, 'get_word_embedding'):
+            word_emb = news_encoder.get_word_embedding(word)
+        elif hasattr(embedding_layer, 'weight'):
+            # Try to get vocabulary and look up word
+            if hasattr(news_encoder, 'vocab') or hasattr(news_encoder, 'word2idx'):
+                vocab = getattr(news_encoder, 'vocab', getattr(news_encoder, 'word2idx', {}))
+                word_idx = vocab.get(word.lower(), 0)  # 0 is usually UNK
+                word_emb = embedding_layer.weight[word_idx]
+            else:
+                # Can't get word embeddings - fallback to occlusion
+                return _compute_attributions_glove_occlusion(model, candidate_text, history_texts, device)
+        else:
+            return _compute_attributions_glove_occlusion(model, candidate_text, history_texts, device)
+
+        word_embeddings.append(word_emb)
+
+    # Stack word embeddings: [n_words, embed_dim]
+    input_embeddings = torch.stack(word_embeddings).unsqueeze(0)  # [1, n_words, embed_dim]
+
+    # Create baseline (zero embeddings)
+    baseline_embeddings = torch.zeros_like(input_embeddings)
+
+    # Integrated Gradients
+    accumulated_grads = torch.zeros_like(input_embeddings)
+
+    for step in range(n_steps):
+        alpha = (step + 1) / n_steps
+        interpolated = baseline_embeddings + alpha * (input_embeddings - baseline_embeddings)
+        interpolated.requires_grad_(True)
+
+        # Encode news from interpolated embeddings
+        candidate_emb = encode_glove_news_from_embeddings(
+            news_encoder, interpolated
+        ).squeeze(0)  # [embed_dim]
+
+        # Compute score: dot product with user embedding
+        score = torch.dot(candidate_emb, user_emb)
+
+        # Backward pass
+        score.backward()
+
+        # Accumulate gradients
+        if interpolated.grad is not None:
+            accumulated_grads += interpolated.grad.clone()
+
+        # Zero gradients
+        interpolated.grad = None
+
+    # Average and multiply by difference
+    avg_grads = accumulated_grads / n_steps
+    attributions = avg_grads * (input_embeddings - baseline_embeddings)
+
+    # Sum over embedding dimension to get per-word attributions
+    word_attributions = attributions.sum(dim=-1).squeeze(0)  # [n_words]
+
+    return word_attributions
+
+
+def _compute_attributions_glove_occlusion(
+    model, candidate_text: str, history_texts: List[str], device
+) -> torch.Tensor:
+    """
+    Fallback occlusion-based attribution for GloVe models.
+    Used when Integrated Gradients cannot be applied.
+    """
+    words = candidate_text.split()
+    n_words = len(words)
+
+    if n_words == 0:
+        return torch.zeros(1, device=device)
+
+    news_encoder = model.news_encoder
+    user_encoder = model.user_encoder
+    device_indicator = torch.tensor([0], device=device)
+
+    with torch.no_grad():
+        # Encode history
+        history_embs = []
+        for hist_text in history_texts:
+            hist_emb = news_encoder(input_ids=device_indicator, text_list=[hist_text])
+            if hist_emb.dim() > 1:
+                hist_emb = hist_emb.squeeze(0)
+            history_embs.append(hist_emb)
+
+        if len(history_embs) > 0:
+            history_embs = torch.stack(history_embs).unsqueeze(0)
+            user_emb = user_encoder(history_embs).squeeze(0)
+        else:
+            user_emb = torch.zeros(news_encoder.output_dim if hasattr(news_encoder, 'output_dim') else 400, device=device)
+
         # Get baseline score with full text
         candidate_emb_full = news_encoder(
             input_ids=device_indicator,
             text_list=[candidate_text]
         )
-        # Squeeze batch dimension if present to get [dim]
         if candidate_emb_full.dim() > 1:
             candidate_emb_full = candidate_emb_full.squeeze(0)
         baseline_score = torch.matmul(candidate_emb_full, user_emb.unsqueeze(-1)).squeeze().item()
@@ -491,29 +594,99 @@ def compute_attributions_glove(
         word_attributions = torch.zeros(n_words, device=device)
 
         for i in range(n_words):
-            # Create text with word i removed
             words_occluded = words[:i] + words[i+1:]
             text_occluded = " ".join(words_occluded) if words_occluded else ""
 
-            # Get score without this word
             if text_occluded:
                 candidate_emb_occluded = news_encoder(
                     input_ids=device_indicator,
                     text_list=[text_occluded]
                 )
-                # Squeeze batch dimension if present to get [dim]
                 if candidate_emb_occluded.dim() > 1:
                     candidate_emb_occluded = candidate_emb_occluded.squeeze(0)
                 occluded_score = torch.matmul(candidate_emb_occluded, user_emb.unsqueeze(-1)).squeeze().item()
             else:
-                # Empty text -> score of 0
                 occluded_score = 0.0
 
-            # Attribution is the difference when removing the word
-            # Positive attribution means the word increases the score
             word_attributions[i] = baseline_score - occluded_score
 
     return word_attributions
+
+
+def encode_glove_news_from_embeddings(news_encoder, embeddings):
+    """
+    Encode news from word embeddings for GloVe-based models.
+
+    Args:
+        news_encoder: The GloVe news encoder
+        embeddings: Word embeddings [batch_size, seq_len, embed_dim]
+
+    Returns:
+        news_embedding: Aggregated news embedding [batch_size, output_dim]
+    """
+    # For GloVe models, we need to pass through the encoder layers
+    # Different architectures handle this differently
+
+    # Check for CNN layers (NAML)
+    if hasattr(news_encoder, 'cnn'):
+        # Apply CNN
+        # embeddings: [batch, seq_len, embed_dim]
+        # CNN expects: [batch, embed_dim, seq_len]
+        embeddings_transposed = embeddings.transpose(1, 2)
+        cnn_output = news_encoder.cnn(embeddings_transposed)
+        # cnn_output: [batch, num_filters, seq_len']
+
+        # Apply pooling if available
+        if hasattr(news_encoder, 'pooling'):
+            pooled = news_encoder.pooling(cnn_output)
+        else:
+            # Max pooling over sequence dimension
+            pooled = torch.max(cnn_output, dim=2)[0]
+
+        # Apply attention if available
+        if hasattr(news_encoder, 'additive_attention') or hasattr(news_encoder, 'attention'):
+            attention = getattr(news_encoder, 'additive_attention', getattr(news_encoder, 'attention', None))
+            if attention is not None:
+                news_emb = attention(pooled.unsqueeze(1)).squeeze(1)
+            else:
+                news_emb = pooled
+        else:
+            news_emb = pooled
+
+    # Check for attention layers (NRMS)
+    elif hasattr(news_encoder, 'self_attention') or hasattr(news_encoder, 'multihead_attention'):
+        # Apply self-attention
+        attention_layer = getattr(news_encoder, 'self_attention',
+                                 getattr(news_encoder, 'multihead_attention', None))
+        if attention_layer is not None:
+            # Self-attention expects [batch, seq_len, embed_dim]
+            attended = attention_layer(embeddings)[0]  # Get attention output
+        else:
+            attended = embeddings
+
+        # Apply additive attention if available
+        if hasattr(news_encoder, 'additive_attention'):
+            news_emb = news_encoder.additive_attention(attended)
+        else:
+            # Mean pooling
+            news_emb = attended.mean(dim=1)
+
+    # Simple aggregation (fallback)
+    else:
+        # Check for additive attention
+        if hasattr(news_encoder, 'additive_attention') or hasattr(news_encoder, 'attention'):
+            attention = getattr(news_encoder, 'additive_attention',
+                              getattr(news_encoder, 'attention', None))
+            if attention is not None:
+                news_emb = attention(embeddings)
+            else:
+                # Mean pooling over sequence dimension
+                news_emb = embeddings.mean(dim=1)
+        else:
+            # Mean pooling over sequence dimension
+            news_emb = embeddings.mean(dim=1)
+
+    return news_emb
 
 
 def compute_attributions_transformer(
