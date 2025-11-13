@@ -311,6 +311,14 @@ def extract_attributions_for_dataset(
                             n_steps=n_steps,
                         )
 
+                    # Ensure attributions match tokens length
+                    if len(attributions) > len(tokens):
+                        attributions = attributions[:len(tokens)]
+                    elif len(attributions) < len(tokens):
+                        # Pad with zeros if needed
+                        padding = torch.zeros(len(tokens) - len(attributions), device=device)
+                        attributions = torch.cat([attributions, padding])
+
                     # Get prediction score
                     with torch.no_grad():
                         batch_single = {
@@ -761,11 +769,29 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
         for j, label_key in enumerate(["real", "fake"]):
             ax = axes[i, j]
 
+            # Check if model data exists
+            if model_key not in word_importance:
+                ax.text(0.5, 0.5, f"No {model_key} model data", ha="center", va="center", fontsize=12)
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Check if label data exists
+            if label_key not in word_importance[model_key]:
+                ax.text(0.5, 0.5, f"No {label_key} data", ha="center", va="center", fontsize=12)
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
             # Get top words by mean attribution
             words_data = word_importance[model_key][label_key]
             if not words_data:
-                ax.text(0.5, 0.5, "No data", ha="center", va="center")
+                ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
                 ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
                 continue
 
             # Sort by mean attribution magnitude
@@ -774,8 +800,10 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
             )[:top_k]
 
             if not sorted_words:
-                ax.text(0.5, 0.5, "No significant words", ha="center", va="center")
+                ax.text(0.5, 0.5, "No significant words", ha="center", va="center", fontsize=12)
                 ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
                 continue
 
             # Extract data
@@ -804,7 +832,18 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close()
+
+    # Print diagnostic information
     print(f"Saved word importance plot to: {save_path}")
+    for model_key in ["clean", "poisoned"]:
+        if model_key not in word_importance:
+            print(f"  Warning: No {model_key} model data found in word importance")
+        else:
+            for label_key in ["real", "fake"]:
+                if label_key not in word_importance[model_key]:
+                    print(f"  Warning: No {label_key} data found for {model_key} model")
+                elif not word_importance[model_key][label_key]:
+                    print(f"  Warning: Empty {label_key} data for {model_key} model")
 
 
 def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int = 10):
@@ -839,8 +878,11 @@ def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int 
         attr = attributions["attributions"][sample_idx]
         label = attributions["labels"][sample_idx]
 
-        # Filter out padding
-        non_pad = [i for i, t in enumerate(tokens) if t not in ["[PAD]", "<pad>"]]
+        # Ensure attr and tokens have compatible lengths
+        min_len = min(len(tokens), len(attr))
+
+        # Filter out padding, ensuring indices are within bounds
+        non_pad = [i for i, t in enumerate(tokens[:min_len]) if t not in ["[PAD]", "<pad>"]]
         tokens_filtered = [tokens[i] for i in non_pad]
         attr_filtered = [attr[i] for i in non_pad]
 
