@@ -10,12 +10,20 @@ import sys
 import os
 from tqdm import tqdm
 
+# sys.path.insert(
+#     0,
+#     os.path.abspath(
+#         "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/src/models"
+#     ),
+# )
+
 sys.path.insert(
     0,
     os.path.abspath(
-        "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/src/models"
+        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs/src/models"
     ),
 )
+
 from registry import get_model_class
 
 
