@@ -23,14 +23,21 @@ sys.path.insert(0, parent_dir)
 sys.path.insert(
     0,
     os.path.abspath(
-        "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs"
+        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs"
     ),
 )
+
+# sys.path.insert(
+#     0,
+#     os.path.abspath(
+#         "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs"
+#     ),
+# )
 
 from configs import load_config as load_model_config
 
 # Import from representation_analysis
-sys.path.insert(0, os.path.join(parent_dir, 'representation_analysis'))
+sys.path.insert(0, os.path.join(parent_dir, "representation_analysis"))
 from data_loader import load_test_data, get_data_statistics_fast
 
 # Import from current directory
@@ -60,12 +67,12 @@ def print_top_words(word_importance, model_name, label, top_k=10):
 
     # Sort by mean attribution magnitude
     sorted_words = sorted(
-        words_data.items(),
-        key=lambda x: abs(x[1]['mean']),
-        reverse=True
+        words_data.items(), key=lambda x: abs(x[1]["mean"]), reverse=True
     )[:top_k]
 
-    print(f"\n  Top {top_k} words for {model_name.upper()} model - {label.upper()} news:")
+    print(
+        f"\n  Top {top_k} words for {model_name.upper()} model - {label.upper()} news:"
+    )
     print(f"  {'Word':<20} {'Attribution':<15} {'Frequency':<10}")
     print(f"  {'-'*50}")
 
@@ -73,63 +80,63 @@ def print_top_words(word_importance, model_name, label, top_k=10):
         print(f"  {word:<20} {stats['mean']:>10.4f}     {stats['count']:>5}")
 
 
-def save_attribution_report(
-    clean_importance,
-    poisoned_importance,
-    output_path
-):
+def save_attribution_report(clean_importance, poisoned_importance, output_path):
     """Save detailed attribution analysis report."""
     report = {
-        'clean_model': {},
-        'poisoned_model': {},
-        'significant_changes': {'real': {}, 'fake': {}}
+        "clean_model": {},
+        "poisoned_model": {},
+        "significant_changes": {"real": {}, "fake": {}},
     }
 
     # Convert to JSON-serializable format
-    for model_key, model_name in [('clean', 'clean_model'), ('poisoned', 'poisoned_model')]:
-        importance_dict = clean_importance if model_key == 'clean' else poisoned_importance
+    for model_key, model_name in [
+        ("clean", "clean_model"),
+        ("poisoned", "poisoned_model"),
+    ]:
+        importance_dict = (
+            clean_importance if model_key == "clean" else poisoned_importance
+        )
 
-        for label in ['real', 'fake']:
+        for label in ["real", "fake"]:
             words_data = importance_dict[model_key][label]
             report[model_name][label] = {
                 word: {
-                    'mean_attribution': float(stats['mean']),
-                    'std_attribution': float(stats['std']),
-                    'frequency': int(stats['count'])
+                    "mean_attribution": float(stats["mean"]),
+                    "std_attribution": float(stats["std"]),
+                    "frequency": int(stats["count"]),
                 }
                 for word, stats in words_data.items()
             }
 
     # Compute changes
-    for label in ['real', 'fake']:
-        clean_words = set(clean_importance['clean'][label].keys())
-        poisoned_words = set(poisoned_importance['poisoned'][label].keys())
+    for label in ["real", "fake"]:
+        clean_words = set(clean_importance["clean"][label].keys())
+        poisoned_words = set(poisoned_importance["poisoned"][label].keys())
         common = clean_words & poisoned_words
 
         for word in common:
-            clean_score = clean_importance['clean'][label][word]['mean']
-            poisoned_score = poisoned_importance['poisoned'][label][word]['mean']
+            clean_score = clean_importance["clean"][label][word]["mean"]
+            poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
             change = poisoned_score - clean_score
 
             if abs(change) > 0.01:  # Significant change
-                report['significant_changes'][label][word] = {
-                    'clean_attribution': float(clean_score),
-                    'poisoned_attribution': float(poisoned_score),
-                    'absolute_change': float(change),
-                    'percent_change': float((change / (abs(clean_score) + 1e-10)) * 100)
+                report["significant_changes"][label][word] = {
+                    "clean_attribution": float(clean_score),
+                    "poisoned_attribution": float(poisoned_score),
+                    "absolute_change": float(change),
+                    "percent_change": float(
+                        (change / (abs(clean_score) + 1e-10)) * 100
+                    ),
                 }
 
     # Save report
-    with open(output_path, 'w') as f:
+    with open(output_path, "w") as f:
         json.dump(report, f, indent=2)
 
     print(f"\nSaved attribution report to: {output_path}")
 
 
-def analyze_attack_effectiveness(
-    clean_importance,
-    poisoned_importance
-):
+def analyze_attack_effectiveness(clean_importance, poisoned_importance):
     """
     Analyze how effective the attack was in changing word attributions.
 
@@ -141,11 +148,11 @@ def analyze_attack_effectiveness(
 
     metrics = {}
 
-    for label in ['real', 'fake']:
+    for label in ["real", "fake"]:
         print(f"\n{label.upper()} NEWS:")
 
-        clean_words = set(clean_importance['clean'][label].keys())
-        poisoned_words = set(poisoned_importance['poisoned'][label].keys())
+        clean_words = set(clean_importance["clean"][label].keys())
+        poisoned_words = set(poisoned_importance["poisoned"][label].keys())
 
         # Overlap
         common = clean_words & poisoned_words
@@ -160,8 +167,8 @@ def analyze_attack_effectiveness(
         if common:
             changes = []
             for word in common:
-                clean_score = clean_importance['clean'][label][word]['mean']
-                poisoned_score = poisoned_importance['poisoned'][label][word]['mean']
+                clean_score = clean_importance["clean"][label][word]["mean"]
+                poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
                 change = abs(poisoned_score - clean_score)
                 changes.append(change)
 
@@ -171,20 +178,22 @@ def analyze_attack_effectiveness(
             print(f"  Maximum attribution change: {max_change:.4f}")
 
             metrics[label] = {
-                'common_words': len(common),
-                'only_clean': len(only_clean),
-                'only_poisoned': len(only_poisoned),
-                'avg_change': float(avg_change),
-                'max_change': float(max_change)
+                "common_words": len(common),
+                "only_clean": len(only_clean),
+                "only_poisoned": len(only_poisoned),
+                "avg_change": float(avg_change),
+                "max_change": float(max_change),
             }
 
         # Find words with sign flips
         sign_flips = []
         for word in common:
-            clean_score = clean_importance['clean'][label][word]['mean']
-            poisoned_score = poisoned_importance['poisoned'][label][word]['mean']
+            clean_score = clean_importance["clean"][label][word]["mean"]
+            poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
 
-            if (clean_score > 0 and poisoned_score < 0) or (clean_score < 0 and poisoned_score > 0):
+            if (clean_score > 0 and poisoned_score < 0) or (
+                clean_score < 0 and poisoned_score > 0
+            ):
                 sign_flips.append((word, clean_score, poisoned_score))
 
         if sign_flips:
@@ -205,25 +214,25 @@ def main():
         "--config",
         type=str,
         required=True,
-        help="Path to config file (with both model_checkpoint and poisoned_model_checkpoint)"
+        help="Path to config file (with both model_checkpoint and poisoned_model_checkpoint)",
     )
     parser.add_argument(
         "--n_samples",
         type=int,
         default=100,
-        help="Number of samples to analyze (default: 100)"
+        help="Number of samples to analyze (default: 100)",
     )
     parser.add_argument(
         "--n_steps",
         type=int,
         default=50,
-        help="Number of integration steps for Integrated Gradients (default: 50)"
+        help="Number of integration steps for Integrated Gradients (default: 50)",
     )
     parser.add_argument(
         "--top_k",
         type=int,
         default=15,
-        help="Number of top words to display (default: 15)"
+        help="Number of top words to display (default: 15)",
     )
     args = parser.parse_args()
 
@@ -238,7 +247,9 @@ def main():
     if "model_checkpoint" not in config:
         raise ValueError("Config must contain 'model_checkpoint' for clean model")
     if "poisoned_model_checkpoint" not in config:
-        raise ValueError("Config must contain 'poisoned_model_checkpoint' for poisoned model")
+        raise ValueError(
+            "Config must contain 'poisoned_model_checkpoint' for poisoned model"
+        )
 
     # Setup output directory
     output_dir = Path(config.get("output_dir", "outputs/attribution_analysis"))
@@ -254,7 +265,7 @@ def main():
     model_config = load_model_config(config.get("model_config"))
 
     # Check model type
-    use_glove = 'glove' in model_config.model_name.lower()
+    use_glove = "glove" in model_config.model_name.lower()
     print(f"\nModel type: {'GloVe' if use_glove else 'Transformer'}")
     print(f"Architecture: {model_config.architecture}")
 
@@ -280,7 +291,7 @@ def main():
         clean_config,
         model_config,
         n_samples=args.n_samples,
-        n_steps=args.n_steps
+        n_steps=args.n_steps,
     )
 
     # Extract attributions from poisoned model
@@ -295,7 +306,7 @@ def main():
         poisoned_config,
         model_config,
         n_samples=args.n_samples,
-        n_steps=args.n_steps
+        n_steps=args.n_steps,
     )
 
     # Analyze word importance
@@ -304,9 +315,7 @@ def main():
     print(f"{'='*75}")
 
     word_importance = analyze_word_importance(
-        attributions_clean,
-        attributions_poisoned,
-        top_k=args.top_k
+        attributions_clean, attributions_poisoned, top_k=args.top_k
     )
 
     # Print top words
@@ -314,14 +323,13 @@ def main():
     print("TOP ATTRIBUTED WORDS")
     print(f"{'='*75}")
 
-    for model_name in ['clean', 'poisoned']:
-        for label in ['real', 'fake']:
+    for model_name in ["clean", "poisoned"]:
+        for label in ["real", "fake"]:
             print_top_words(word_importance, model_name, label, top_k=args.top_k)
 
     # Analyze attack effectiveness
     attack_metrics = analyze_attack_effectiveness(
-        word_importance,
-        word_importance  # Using combined importance dict
+        word_importance, word_importance  # Using combined importance dict
     )
 
     # Create visualizations
@@ -334,30 +342,26 @@ def main():
 
     print("\n1. Word importance plots...")
     plot_word_importance(
-        word_importance,
-        viz_dir / "word_importance.png",
-        top_k=args.top_k
+        word_importance, viz_dir / "word_importance.png", top_k=args.top_k
     )
 
     print("2. Attribution heatmaps - clean model...")
     plot_attribution_heatmap(
         attributions_clean,
         viz_dir / "attribution_heatmap_clean.png",
-        n_samples=min(10, args.n_samples)
+        n_samples=min(10, args.n_samples),
     )
 
     print("3. Attribution heatmaps - poisoned model...")
     plot_attribution_heatmap(
         attributions_poisoned,
         viz_dir / "attribution_heatmap_poisoned.png",
-        n_samples=min(10, args.n_samples)
+        n_samples=min(10, args.n_samples),
     )
 
     print("4. Attribution comparison...")
     compare_attributions(
-        word_importance,
-        word_importance,
-        viz_dir / "attribution_comparison.png"
+        word_importance, word_importance, viz_dir / "attribution_comparison.png"
     )
 
     # Save detailed report
@@ -366,25 +370,21 @@ def main():
     print(f"{'='*75}")
 
     report_path = output_dir / "attribution_report.json"
-    save_attribution_report(
-        word_importance,
-        word_importance,
-        report_path
-    )
+    save_attribution_report(word_importance, word_importance, report_path)
 
     # Save raw attributions (optional)
     print("\nSaving raw attribution data...")
     np.savez(
         output_dir / "attributions_clean.npz",
-        attributions=attributions_clean['attributions'],
-        labels=attributions_clean['labels'],
-        scores=attributions_clean['scores'],
+        attributions=attributions_clean["attributions"],
+        labels=attributions_clean["labels"],
+        scores=attributions_clean["scores"],
     )
     np.savez(
         output_dir / "attributions_poisoned.npz",
-        attributions=attributions_poisoned['attributions'],
-        labels=attributions_poisoned['labels'],
-        scores=attributions_poisoned['scores'],
+        attributions=attributions_poisoned["attributions"],
+        labels=attributions_poisoned["labels"],
+        scores=attributions_poisoned["scores"],
     )
 
     # Summary
