@@ -374,17 +374,22 @@ def main():
 
     # Save raw attributions (optional)
     print("\nSaving raw attribution data...")
+    # Convert attributions list to object array to handle variable-length sequences
     np.savez(
         output_dir / "attributions_clean.npz",
-        attributions=attributions_clean["attributions"],
+        attributions=np.array(attributions_clean["attributions"], dtype=object),
+        tokens=np.array(attributions_clean["tokens"], dtype=object),
         labels=attributions_clean["labels"],
         scores=attributions_clean["scores"],
+        allow_pickle=True,
     )
     np.savez(
         output_dir / "attributions_poisoned.npz",
-        attributions=attributions_poisoned["attributions"],
+        attributions=np.array(attributions_poisoned["attributions"], dtype=object),
+        tokens=np.array(attributions_poisoned["tokens"], dtype=object),
         labels=attributions_poisoned["labels"],
         scores=attributions_poisoned["scores"],
+        allow_pickle=True,
     )
 
     # Summary
