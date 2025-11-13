@@ -465,6 +465,9 @@ def compute_attributions_glove(
         history_embs = []
         for hist_text in history_texts:
             hist_emb = news_encoder(input_ids=device_indicator, text_list=[hist_text])
+            # Squeeze batch dimension if present to get [dim]
+            if hist_emb.dim() > 1:
+                hist_emb = hist_emb.squeeze(0)
             history_embs.append(hist_emb)
 
         if len(history_embs) > 0:
@@ -479,6 +482,9 @@ def compute_attributions_glove(
             input_ids=device_indicator,
             text_list=[candidate_text]
         )
+        # Squeeze batch dimension if present to get [dim]
+        if candidate_emb_full.dim() > 1:
+            candidate_emb_full = candidate_emb_full.squeeze(0)
         baseline_score = torch.matmul(candidate_emb_full, user_emb.unsqueeze(-1)).squeeze().item()
 
         # Compute attribution for each word by occlusion
@@ -495,6 +501,9 @@ def compute_attributions_glove(
                     input_ids=device_indicator,
                     text_list=[text_occluded]
                 )
+                # Squeeze batch dimension if present to get [dim]
+                if candidate_emb_occluded.dim() > 1:
+                    candidate_emb_occluded = candidate_emb_occluded.squeeze(0)
                 occluded_score = torch.matmul(candidate_emb_occluded, user_emb.unsqueeze(-1)).squeeze().item()
             else:
                 # Empty text -> score of 0
