@@ -431,18 +431,17 @@ def compute_attributions_glove(
     model, candidate_text: str, history_texts: List[str], device, n_steps: int = 50
 ) -> torch.Tensor:
     """
-    Compute attributions for GloVe-based models through full architecture.
+    Compute attributions for GloVe-based models using occlusion-based approach.
 
-    For GloVe models, attribution is computed at the sentence embedding level
-    since these models produce sentence embeddings through their architecture
-    (word embeddings -> CNN/attention -> sentence embedding).
+    For GloVe models, we compute word-level attributions by measuring the impact
+    of removing each word on the model's prediction score.
 
     Args:
         model: Full recommendation model
         candidate_text: Candidate news text
         history_texts: List of history news texts
         device: Device to run on
-        n_steps: Number of integration steps
+        n_steps: Number of integration steps (unused for occlusion, kept for API compatibility)
 
     Returns:
         attributions: Attribution scores for each word [n_words]
@@ -451,20 +450,14 @@ def compute_attributions_glove(
     words = candidate_text.split()
     n_words = len(words)
 
+    if n_words == 0:
+        return torch.zeros(1, device=device)
+
     news_encoder = model.news_encoder
     user_encoder = model.user_encoder
 
     # Device indicator for GloVe models
     device_indicator = torch.tensor([0], device=device)
-
-    # Encode the candidate text to get sentence embedding
-    # This requires gradients to flow through the news encoder
-    def encode_candidate(text):
-        """Encode candidate text through news encoder."""
-        return news_encoder(
-            input_ids=device_indicator,
-            text_list=[text]
-        )
 
     # Get user embedding (fixed during attribution)
     with torch.no_grad():
@@ -481,44 +474,35 @@ def compute_attributions_glove(
             # No history - use zero user embedding
             user_emb = torch.zeros(news_encoder.output_dim if hasattr(news_encoder, 'output_dim') else 400, device=device)
 
-        # Get candidate embedding (without gradients first to get shape)
-        candidate_emb_init = encode_candidate(candidate_text)
+        # Get baseline score with full text
+        candidate_emb_full = news_encoder(
+            input_ids=device_indicator,
+            text_list=[candidate_text]
+        )
+        baseline_score = torch.matmul(candidate_emb_full, user_emb.unsqueeze(-1)).squeeze().item()
 
-    # Create baseline (zero embeddings)
-    baseline_candidate_emb = torch.zeros_like(candidate_emb_init)
+        # Compute attribution for each word by occlusion
+        word_attributions = torch.zeros(n_words, device=device)
 
-    # Accumulate gradients at the sentence embedding level
-    accumulated_grads = torch.zeros_like(candidate_emb_init)
+        for i in range(n_words):
+            # Create text with word i removed
+            words_occluded = words[:i] + words[i+1:]
+            text_occluded = " ".join(words_occluded) if words_occluded else ""
 
-    for step in range(n_steps):
-        alpha = (step + 1) / n_steps
-        interpolated_candidate = baseline_candidate_emb + alpha * (candidate_emb_init - baseline_candidate_emb)
-        interpolated_candidate.requires_grad_(True)
+            # Get score without this word
+            if text_occluded:
+                candidate_emb_occluded = news_encoder(
+                    input_ids=device_indicator,
+                    text_list=[text_occluded]
+                )
+                occluded_score = torch.matmul(candidate_emb_occluded, user_emb.unsqueeze(-1)).squeeze().item()
+            else:
+                # Empty text -> score of 0
+                occluded_score = 0.0
 
-        # Compute score: dot product with user embedding
-        score = torch.matmul(interpolated_candidate, user_emb.unsqueeze(-1)).squeeze()
-
-        # Backward pass
-        score.backward()
-
-        # Accumulate gradients
-        if interpolated_candidate.grad is not None:
-            accumulated_grads += interpolated_candidate.grad.clone()
-
-        # Zero gradients
-        interpolated_candidate.grad = None
-
-    # Average and multiply by difference
-    avg_grads = accumulated_grads / n_steps
-    attributions = avg_grads * (candidate_emb_init - baseline_candidate_emb)
-
-    # Sum over embedding dimension to get single attribution value
-    # Since we have one embedding for the whole text, distribute it across words
-    total_attribution = attributions.sum().item()
-
-    # Distribute attribution uniformly across words (since GloVe produces sentence-level embeddings)
-    # This shows that all words contribute equally to the sentence representation
-    word_attributions = torch.ones(n_words, device=device) * (total_attribution / max(n_words, 1))
+            # Attribution is the difference when removing the word
+            # Positive attribution means the word increases the score
+            word_attributions[i] = baseline_score - occluded_score
 
     return word_attributions
 
