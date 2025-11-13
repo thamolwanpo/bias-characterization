@@ -23,10 +23,17 @@ from sklearn.metrics.pairwise import cosine_similarity
 import sys
 import os
 
+# sys.path.insert(
+#     0,
+#     os.path.abspath(
+#         "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs"
+#     ),
+# )
+
 sys.path.insert(
     0,
     os.path.abspath(
-        "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs"
+        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs"
     ),
 )
 

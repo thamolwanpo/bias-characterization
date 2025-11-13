@@ -15,10 +15,17 @@ import ast
 from torch.utils.data import Dataset
 from tqdm import trange, tqdm
 
+# sys.path.insert(
+#     0,
+#     os.path.abspath(
+#         "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/src/evaluation"
+#     ),
+# )
+
 sys.path.insert(
     0,
     os.path.abspath(
-        "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/src/evaluation"
+        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs/src/evaluation"
     ),
 )
 
@@ -26,11 +33,21 @@ from benchmark_dataset import benchmark_collate_fn, convert_pairwise_to_listwise
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
+from typing import Optional, Dict, Any
+import json
+
 
 class BenchmarkDataset(Dataset):
     """Dataset for benchmark evaluation."""
 
-    def __init__(self, csv_path, news_items_path, tokenizer, config):
+    def __init__(
+        self,
+        csv_path,
+        news_items_path,
+        tokenizer,
+        config,
+        user_map: Optional[Dict[Any, int]] = None,
+    ):
         """
         Args:
             csv_path: Path to benchmark CSV file
@@ -48,13 +65,65 @@ class BenchmarkDataset(Dataset):
         self.config = config
         self.use_glove = "glove" in config.model_name.lower()
 
+        # Check if this is LSTUR model
+        self.use_lstur = config.architecture == "lstur"
+        self.user_to_idx = None
+
         # Load news_items.csv for text lookup
         print(f"Loading news items from: {news_items_path}")
         self.news_items = pd.read_csv(news_items_path, index_col="item_id")
         print(f"  Loaded {len(self.news_items)} news items")
 
+        # MODIFICATION 2: Load the user map if LSTUR and no map injected
+        if self.use_lstur:
+            if user_map is not None:
+                # Use injected map (from ModelEvaluator)
+                self.user_to_idx = user_map
+            else:
+                # Load from file (standard evaluation case)
+                self.user_map_path = self.config.data_dir / "user_to_idx_map.json"
+                if self.user_map_path.exists():
+                    print(f"  Loading user mapping from: {self.user_map_path}")
+                    with open(self.user_map_path, "r") as f:
+                        raw_map = json.load(f)
+                        # Keys in JSON are strings, convert them back to original type
+                        self.user_to_idx = {
+                            self._convert_key(k): v for k, v in raw_map.items()
+                        }
+                else:
+                    # If this is the main benchmark run, it MUST find the map.
+                    raise FileNotFoundError(
+                        f"LSTUR requires a pre-built user map. File not found: {self.user_map_path}"
+                    )
+            print(f"  Loaded {len(self.user_to_idx)} user entries for LSTUR.")
+
     def __len__(self):
         return len(self.df)
+
+    def _convert_key(self, key):
+        """Helper to convert string keys from JSON back to original type (int or str)."""
+        try:
+            return int(key)
+        except ValueError:
+            return key
+
+    def _get_user_idx(self, user_id: str) -> int:
+        """Get user index for embedding lookup."""
+        if not self.use_lstur:
+            return 0
+
+        # Try to convert to appropriate type
+        try:
+            if isinstance(user_id, str):
+                try:
+                    user_id = int(user_id)
+                except ValueError:
+                    pass
+        except:
+            pass
+
+        # Return mapped index, default to 0 (UNK) if not found
+        return self.user_to_idx.get(user_id, 0)
 
     def _get_text_by_id(self, item_id: str) -> str:
         """Lookup text by item_id from news_items.csv."""
@@ -71,6 +140,8 @@ class BenchmarkDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         impressions = row["impressions"]
+        user_id = row["user_id"]
+        user_idx = self._get_user_idx(user_id)
 
         # Sort so positives come first
         impressions.sort(key=lambda x: x[2], reverse=True)
@@ -100,7 +171,8 @@ class BenchmarkDataset(Dataset):
                 "candidate_titles": candidate_titles,
                 "history_texts": history_texts,
                 "history_titles": history_titles,
-                "user_id": row["user_id"],
+                "user_id": user_id,
+                "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user index
                 "impression_data": impressions,
             }
         else:
@@ -151,7 +223,8 @@ class BenchmarkDataset(Dataset):
                 "history_attention_mask": history_text_inputs["attention_mask"],
                 "history_title_input_ids": history_title_inputs["input_ids"],
                 "history_title_attention_mask": history_title_inputs["attention_mask"],
-                "user_id": row["user_id"],
+                "user_id": user_id,
+                "user_ids": torch.tensor(user_idx, dtype=torch.long),  # Add user index
                 "impression_data": impressions,
             }
 
