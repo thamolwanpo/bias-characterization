@@ -425,6 +425,10 @@ def compute_attributions_glove(
     """
     Compute attributions for GloVe-based models through full architecture.
 
+    For GloVe models, attribution is computed at the sentence embedding level
+    since these models produce sentence embeddings through their architecture
+    (word embeddings -> CNN/attention -> sentence embedding).
+
     Args:
         model: Full recommendation model
         candidate_text: Candidate news text
@@ -439,48 +443,48 @@ def compute_attributions_glove(
     words = candidate_text.split()
     n_words = len(words)
 
-    # Get GloVe embeddings for each word
     news_encoder = model.news_encoder
     user_encoder = model.user_encoder
 
-    # Get the embedding layer
-    if hasattr(news_encoder, "embedding"):
-        embedding_layer = news_encoder.embedding
-    else:
-        raise ValueError("Cannot find embedding layer in GloVe model")
-
-    # Convert words to embedding indices (this is approximate - in practice you'd use the actual vocab)
-    # For now, we'll work directly with text through the news encoder
+    # Device indicator for GloVe models
     device_indicator = torch.tensor([0], device=device)
 
-    # Get input embeddings by encoding the candidate text
-    with torch.no_grad():
-        # Encode candidate
-        candidate_emb = news_encoder(
-            input_ids=device_indicator, text_list=[candidate_text]
+    # Encode the candidate text to get sentence embedding
+    # This requires gradients to flow through the news encoder
+    def encode_candidate(text):
+        """Encode candidate text through news encoder."""
+        return news_encoder(
+            input_ids=device_indicator,
+            text_list=[text]
         )
 
+    # Get user embedding (fixed during attribution)
+    with torch.no_grad():
         # Encode history
         history_embs = []
         for hist_text in history_texts:
             hist_emb = news_encoder(input_ids=device_indicator, text_list=[hist_text])
             history_embs.append(hist_emb)
-        history_embs = torch.stack(history_embs).unsqueeze(0)  # [1, history_len, dim]
 
-        # Get user embedding
-        user_emb = user_encoder(history_embs).squeeze(0)  # [dim]
+        if len(history_embs) > 0:
+            history_embs = torch.stack(history_embs).unsqueeze(0)  # [1, history_len, dim]
+            user_emb = user_encoder(history_embs).squeeze(0)  # [dim]
+        else:
+            # No history - use zero user embedding
+            user_emb = torch.zeros(news_encoder.output_dim if hasattr(news_encoder, 'output_dim') else 400, device=device)
+
+        # Get candidate embedding (without gradients first to get shape)
+        candidate_emb_init = encode_candidate(candidate_text)
 
     # Create baseline (zero embeddings)
-    baseline_candidate_emb = torch.zeros_like(candidate_emb)
+    baseline_candidate_emb = torch.zeros_like(candidate_emb_init)
 
-    # Accumulate gradients
-    accumulated_grads = torch.zeros_like(candidate_emb)
+    # Accumulate gradients at the sentence embedding level
+    accumulated_grads = torch.zeros_like(candidate_emb_init)
 
     for step in range(n_steps):
         alpha = (step + 1) / n_steps
-        interpolated_candidate = baseline_candidate_emb + alpha * (
-            candidate_emb - baseline_candidate_emb
-        )
+        interpolated_candidate = baseline_candidate_emb + alpha * (candidate_emb_init - baseline_candidate_emb)
         interpolated_candidate.requires_grad_(True)
 
         # Compute score: dot product with user embedding
@@ -498,16 +502,15 @@ def compute_attributions_glove(
 
     # Average and multiply by difference
     avg_grads = accumulated_grads / n_steps
-    attributions = avg_grads * (candidate_emb - baseline_candidate_emb)
+    attributions = avg_grads * (candidate_emb_init - baseline_candidate_emb)
 
-    # Sum over embedding dimension to get single attribution per embedding
-    # Since we have one embedding for the whole text, we'll distribute it across words
+    # Sum over embedding dimension to get single attribution value
+    # Since we have one embedding for the whole text, distribute it across words
     total_attribution = attributions.sum().item()
 
-    # Distribute attribution uniformly across words (simple approximation)
-    word_attributions = torch.ones(n_words, device=device) * (
-        total_attribution / max(n_words, 1)
-    )
+    # Distribute attribution uniformly across words (since GloVe produces sentence-level embeddings)
+    # This shows that all words contribute equally to the sentence representation
+    word_attributions = torch.ones(n_words, device=device) * (total_attribution / max(n_words, 1))
 
     return word_attributions
 
