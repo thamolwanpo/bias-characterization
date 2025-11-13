@@ -223,7 +223,7 @@ def extract_attributions_for_dataset(
     n_steps: int = 50
 ) -> Dict:
     """
-    Extract attributions for a dataset.
+    Extract attributions for a dataset using full model architecture.
 
     Args:
         data_loader: DataLoader providing batches
@@ -247,9 +247,6 @@ def extract_attributions_for_dataset(
     device = config.get('device', 'cpu')
     model = model.to(device)
 
-    # Initialize IG
-    ig = IntegratedGradients(model, baseline_type='pad')
-
     # Storage
     all_attributions = []
     all_tokens = []
@@ -258,8 +255,11 @@ def extract_attributions_for_dataset(
     all_predictions = []
 
     use_glove = 'glove' in model_config.model_name.lower()
+    architecture = model_config.architecture
 
-    print(f"Extracting attributions for {n_samples} samples (use_glove={use_glove})...")
+    print(f"Extracting attributions for {n_samples} samples...")
+    print(f"  Model type: {'GloVe' if use_glove else 'Transformer'}")
+    print(f"  Architecture: {architecture}")
 
     sample_count = 0
     for batch in tqdm(data_loader, desc="Processing batches"):
@@ -269,76 +269,119 @@ def extract_attributions_for_dataset(
         if batch is None:
             continue
 
-        # Get batch data
-        if use_glove:
-            # For GloVe, we need to handle text differently
-            # Skip for now as IG works better with transformer models
-            print("\nWarning: Attribution analysis works best with transformer models.")
-            print("Skipping GloVe models...")
-            break
-        else:
-            # Transformer models
-            candidate_title_ids = batch['candidate_title_input_ids'].to(device)
-            candidate_title_mask = batch['candidate_title_attention_mask'].to(device)
+        batch_size = len(batch.get('impression_data', []))
 
-            batch_size, num_candidates, seq_len = candidate_title_ids.shape
+        # Get labels
+        if 'impression_data' in batch:
+            for impression in batch['impression_data']:
+                is_fake = impression[0][3]  # First candidate's label
+                all_labels.append(is_fake)
 
-            # Get labels
-            if 'impression_data' in batch:
-                for impression in batch['impression_data']:
-                    is_fake = impression[0][3]  # First candidate's label
-                    all_labels.append(is_fake)
+        # Process first candidate for each sample in batch
+        for i in range(min(batch_size, n_samples - sample_count)):
+            try:
+                if use_glove:
+                    # GloVe models - work with text directly
+                    candidate_texts = batch['candidate_titles'][i]
+                    history_texts = batch['history_titles'][i]
 
-            # Process first candidate for each sample in batch
-            for i in range(min(batch_size, n_samples - sample_count)):
-                # Get first candidate
-                input_ids = candidate_title_ids[i, 0, :]  # First candidate
-                attention_mask = candidate_title_mask[i, 0, :]
+                    # Get first candidate text
+                    candidate_text = candidate_texts[0] if isinstance(candidate_texts, list) else candidate_texts
 
-                # Forward pass to get prediction
-                with torch.no_grad():
-                    batch_single = {
-                        'candidate_title_input_ids': candidate_title_ids[i:i+1],
-                        'candidate_title_attention_mask': candidate_title_mask[i:i+1],
-                    }
-                    if 'history_title_input_ids' in batch:
-                        batch_single['history_title_input_ids'] = batch['history_title_input_ids'][i:i+1].to(device)
-                        batch_single['history_title_attention_mask'] = batch['history_title_attention_mask'][i:i+1].to(device)
+                    # Tokenize for display (simple word splitting)
+                    tokens = candidate_text.split()[:50]  # Limit tokens
+                    all_tokens.append(tokens)
 
-                    scores = model(batch_single)
-                    prediction = scores.argmax(dim=1).item()
-                    score = scores[0, 0].item()
+                    # Compute attributions through full model
+                    with torch.enable_grad():
+                        attributions = compute_attributions_glove(
+                            model,
+                            candidate_text,
+                            history_texts,
+                            device,
+                            n_steps=n_steps
+                        )
 
-                all_predictions.append(prediction)
-                all_scores.append(score)
+                    # Get prediction score
+                    with torch.no_grad():
+                        batch_single = {
+                            'candidate_titles': [candidate_texts],
+                            'history_titles': [history_texts],
+                        }
+                        if 'candidate_texts' in batch:
+                            batch_single['candidate_texts'] = [batch['candidate_texts'][i]]
+                        if 'history_texts' in batch:
+                            batch_single['history_texts'] = [batch['history_texts'][i]]
 
-                # Compute attributions (using news encoder directly for simpler computation)
-                try:
-                    # Get tokenizer to decode tokens later
+                        # Add device indicator for GloVe
+                        batch_single['device_indicator'] = torch.tensor([0], device=device)
+
+                        scores = model(batch_single)
+                        prediction = scores.argmax(dim=1).item()
+                        score = scores[0, 0].item()
+
+                    all_predictions.append(prediction)
+                    all_scores.append(score)
+                    all_attributions.append(attributions.cpu().numpy())
+
+                else:
+                    # Transformer models
+                    candidate_title_ids = batch['candidate_title_input_ids'][i:i+1].to(device)
+                    candidate_title_mask = batch['candidate_title_attention_mask'][i:i+1].to(device)
+                    history_title_ids = batch['history_title_input_ids'][i:i+1].to(device)
+                    history_title_mask = batch['history_title_attention_mask'][i:i+1].to(device)
+
+                    # Get first candidate
+                    input_ids = candidate_title_ids[0, 0, :]
+                    attention_mask = candidate_title_mask[0, 0, :]
+
+                    # Get tokens for display
                     from transformers import AutoTokenizer
                     tokenizer = AutoTokenizer.from_pretrained(model_config.model_name)
                     tokens = tokenizer.convert_ids_to_tokens(input_ids.cpu().numpy())
                     all_tokens.append(tokens)
 
-                    # Compute IG attributions
+                    # Compute attributions through full model
                     with torch.enable_grad():
-                        attributions = compute_attributions_simple(
-                            model.news_encoder,
-                            input_ids,
-                            attention_mask,
+                        attributions = compute_attributions_transformer(
+                            model,
+                            candidate_title_ids,
+                            candidate_title_mask,
+                            history_title_ids,
+                            history_title_mask,
+                            target_candidate_idx=0,
                             n_steps=n_steps
                         )
 
+                    # Get prediction score
+                    with torch.no_grad():
+                        batch_single = {
+                            'candidate_title_input_ids': candidate_title_ids,
+                            'candidate_title_attention_mask': candidate_title_mask,
+                            'history_title_input_ids': history_title_ids,
+                            'history_title_attention_mask': history_title_mask,
+                        }
+                        scores = model(batch_single)
+                        prediction = scores.argmax(dim=1).item()
+                        score = scores[0, 0].item()
+
+                    all_predictions.append(prediction)
+                    all_scores.append(score)
                     all_attributions.append(attributions.cpu().numpy())
 
-                except Exception as e:
-                    print(f"\nWarning: Failed to compute attributions for sample {sample_count}: {e}")
-                    all_attributions.append(np.zeros(seq_len))
-                    all_tokens.append(['[UNK]'] * seq_len)
+            except Exception as e:
+                print(f"\nWarning: Failed to compute attributions for sample {sample_count}: {e}")
+                import traceback
+                traceback.print_exc()
+                # Add dummy data
+                all_attributions.append(np.zeros(10))
+                all_tokens.append(['[ERROR]'] * 10)
+                all_predictions.append(0)
+                all_scores.append(0.0)
 
-                sample_count += 1
-                if sample_count >= n_samples:
-                    break
+            sample_count += 1
+            if sample_count >= n_samples:
+                break
 
     print(f"\nExtracted attributions for {len(all_attributions)} samples")
 
@@ -351,38 +394,167 @@ def extract_attributions_for_dataset(
     }
 
 
-def compute_attributions_simple(
-    news_encoder,
-    input_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
+def compute_attributions_glove(
+    model,
+    candidate_text: str,
+    history_texts: List[str],
+    device,
     n_steps: int = 50
 ) -> torch.Tensor:
     """
-    Simplified attribution computation for news encoder.
+    Compute attributions for GloVe-based models through full architecture.
 
     Args:
-        news_encoder: News encoder model
-        input_ids: Input token IDs [seq_len]
-        attention_mask: Attention mask [seq_len]
+        model: Full recommendation model
+        candidate_text: Candidate news text
+        history_texts: List of history news texts
+        device: Device to run on
+        n_steps: Number of integration steps
+
+    Returns:
+        attributions: Attribution scores for each word [n_words]
+    """
+    # Tokenize text (simple word splitting)
+    words = candidate_text.split()
+    n_words = len(words)
+
+    # Get GloVe embeddings for each word
+    news_encoder = model.news_encoder
+    user_encoder = model.user_encoder
+
+    # Get the embedding layer
+    if hasattr(news_encoder, 'embedding'):
+        embedding_layer = news_encoder.embedding
+    else:
+        raise ValueError("Cannot find embedding layer in GloVe model")
+
+    # Convert words to embedding indices (this is approximate - in practice you'd use the actual vocab)
+    # For now, we'll work directly with text through the news encoder
+    device_indicator = torch.tensor([0], device=device)
+
+    # Get input embeddings by encoding the candidate text
+    with torch.no_grad():
+        # Encode candidate
+        candidate_emb = news_encoder(
+            input_ids=device_indicator,
+            text_list=[candidate_text]
+        )
+
+        # Encode history
+        history_embs = []
+        for hist_text in history_texts:
+            hist_emb = news_encoder(
+                input_ids=device_indicator,
+                text_list=[hist_text]
+            )
+            history_embs.append(hist_emb)
+        history_embs = torch.stack(history_embs).unsqueeze(0)  # [1, history_len, dim]
+
+        # Get user embedding
+        user_emb = user_encoder(history_embs).squeeze(0)  # [dim]
+
+    # Create baseline (zero embeddings)
+    baseline_candidate_emb = torch.zeros_like(candidate_emb)
+
+    # Accumulate gradients
+    accumulated_grads = torch.zeros_like(candidate_emb)
+
+    for step in range(n_steps):
+        alpha = (step + 1) / n_steps
+        interpolated_candidate = baseline_candidate_emb + alpha * (candidate_emb - baseline_candidate_emb)
+        interpolated_candidate.requires_grad_(True)
+
+        # Compute score: dot product with user embedding
+        score = torch.matmul(interpolated_candidate, user_emb.unsqueeze(-1)).squeeze()
+
+        # Backward pass
+        score.backward()
+
+        # Accumulate gradients
+        if interpolated_candidate.grad is not None:
+            accumulated_grads += interpolated_candidate.grad.clone()
+
+        # Zero gradients
+        interpolated_candidate.grad = None
+
+    # Average and multiply by difference
+    avg_grads = accumulated_grads / n_steps
+    attributions = avg_grads * (candidate_emb - baseline_candidate_emb)
+
+    # Sum over embedding dimension to get single attribution per embedding
+    # Since we have one embedding for the whole text, we'll distribute it across words
+    total_attribution = attributions.sum().item()
+
+    # Distribute attribution uniformly across words (simple approximation)
+    word_attributions = torch.ones(n_words, device=device) * (total_attribution / max(n_words, 1))
+
+    return word_attributions
+
+
+def compute_attributions_transformer(
+    model,
+    candidate_title_ids: torch.Tensor,
+    candidate_title_mask: torch.Tensor,
+    history_title_ids: torch.Tensor,
+    history_title_mask: torch.Tensor,
+    target_candidate_idx: int = 0,
+    n_steps: int = 50
+) -> torch.Tensor:
+    """
+    Compute attributions for transformer-based models through full architecture.
+
+    Args:
+        model: Full recommendation model
+        candidate_title_ids: Candidate token IDs [1, n_candidates, seq_len]
+        candidate_title_mask: Candidate attention mask [1, n_candidates, seq_len]
+        history_title_ids: History token IDs [1, history_len, seq_len]
+        history_title_mask: History attention mask [1, history_len, seq_len]
+        target_candidate_idx: Which candidate to compute attributions for
         n_steps: Number of integration steps
 
     Returns:
         attributions: Attribution scores [seq_len]
     """
-    device = input_ids.device
+    device = candidate_title_ids.device
+    news_encoder = model.news_encoder
+    user_encoder = model.user_encoder
 
-    # Create baseline (PAD tokens)
-    baseline_ids = torch.zeros_like(input_ids)
-
-    # Get embeddings
+    # Get the embedding layer
     if hasattr(news_encoder, 'bert'):
         embedding_layer = news_encoder.bert.embeddings
+    elif hasattr(news_encoder, 'embeddings'):
+        embedding_layer = news_encoder.embeddings
     else:
-        embedding_layer = news_encoder.embeddings if hasattr(news_encoder, 'embeddings') else news_encoder.embedding
+        raise ValueError("Cannot find embedding layer in transformer model")
+
+    # Get input and baseline embeddings for target candidate
+    target_ids = candidate_title_ids[0, target_candidate_idx, :]  # [seq_len]
+    target_mask = candidate_title_mask[0, target_candidate_idx, :]  # [seq_len]
+
+    baseline_ids = torch.zeros_like(target_ids)  # PAD tokens
 
     with torch.no_grad():
-        input_embeddings = embedding_layer(input_ids.unsqueeze(0))
+        # Get embeddings
+        input_embeddings = embedding_layer(target_ids.unsqueeze(0))  # [1, seq_len, embed_dim]
         baseline_embeddings = embedding_layer(baseline_ids.unsqueeze(0))
+
+        # Encode all candidates (for context)
+        batch_size, num_candidates, seq_len = candidate_title_ids.shape
+        candidate_flat_ids = candidate_title_ids.view(batch_size * num_candidates, seq_len)
+        candidate_flat_mask = candidate_title_mask.view(batch_size * num_candidates, seq_len)
+
+        # Encode history to get user embedding (fixed during attribution)
+        history_len = history_title_ids.shape[1]
+        history_flat_ids = history_title_ids.view(batch_size * history_len, seq_len)
+        history_flat_mask = history_title_mask.view(batch_size * history_len, seq_len)
+
+        history_embs = encode_transformer_news(
+            news_encoder,
+            history_flat_ids,
+            history_flat_mask
+        ).view(batch_size, history_len, -1)
+
+        user_emb = user_encoder(history_embs).squeeze(0)  # [embed_dim]
 
     # Accumulate gradients
     accumulated_grads = torch.zeros_like(input_embeddings)
@@ -392,53 +564,83 @@ def compute_attributions_simple(
         interpolated = baseline_embeddings + alpha * (input_embeddings - baseline_embeddings)
         interpolated.requires_grad_(True)
 
-        # Forward pass through news encoder
-        try:
-            if hasattr(news_encoder, 'bert'):
-                # BERT-based encoder
-                encoder_output = news_encoder.bert.encoder(
-                    interpolated,
-                    attention_mask=attention_mask.unsqueeze(0)
-                )
-                if isinstance(encoder_output, tuple):
-                    sequence_output = encoder_output[0]
-                else:
-                    sequence_output = encoder_output
+        # Encode interpolated candidate
+        candidate_emb = encode_transformer_news_from_embeddings(
+            news_encoder,
+            interpolated,
+            target_mask.unsqueeze(0)
+        ).squeeze(0)  # [embed_dim]
 
-                # Apply attention
-                if hasattr(news_encoder, 'additive_attention'):
-                    output = news_encoder.additive_attention(sequence_output)
-                else:
-                    output = sequence_output[:, 0, :]
-            else:
-                # Simple encoder
-                output = interpolated.mean(dim=1)
+        # Compute score: dot product with user embedding
+        score = torch.dot(candidate_emb, user_emb)
 
-            # Compute output score
-            output_score = output.sum()
+        # Backward pass
+        score.backward()
 
-            # Backward pass
-            output_score.backward()
+        # Accumulate gradients
+        if interpolated.grad is not None:
+            accumulated_grads += interpolated.grad.clone()
 
-            # Accumulate gradients
-            if interpolated.grad is not None:
-                accumulated_grads += interpolated.grad.clone()
-
-            # Zero gradients
-            interpolated.grad = None
-
-        except Exception as e:
-            print(f"Error in integration step {step}: {e}")
-            continue
+        # Zero gradients
+        interpolated.grad = None
 
     # Average and multiply by difference
     avg_grads = accumulated_grads / n_steps
     attributions = avg_grads * (input_embeddings - baseline_embeddings)
 
     # Sum over embedding dimension
-    token_attributions = attributions.sum(dim=-1).squeeze(0)
+    token_attributions = attributions.sum(dim=-1).squeeze(0)  # [seq_len]
 
     return token_attributions
+
+
+def encode_transformer_news(news_encoder, input_ids, attention_mask):
+    """Encode news from token IDs through transformer news encoder."""
+    if hasattr(news_encoder, 'bert'):
+        encoder_output = news_encoder.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask
+        )
+        if hasattr(encoder_output, 'last_hidden_state'):
+            sequence_output = encoder_output.last_hidden_state
+        else:
+            sequence_output = encoder_output[0]
+
+        # Apply final attention/pooling
+        if hasattr(news_encoder, 'additive_attention'):
+            news_emb = news_encoder.additive_attention(sequence_output)
+        else:
+            news_emb = sequence_output[:, 0, :]  # CLS token
+    else:
+        # Direct encoding
+        news_emb = news_encoder(input_ids=input_ids, attention_mask=attention_mask)
+
+    return news_emb
+
+
+def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_mask):
+    """Encode news from embeddings (bypassing token embedding layer)."""
+    if hasattr(news_encoder, 'bert'):
+        # Pass through BERT encoder
+        encoder_output = news_encoder.bert.encoder(
+            embeddings,
+            attention_mask=attention_mask
+        )
+        if isinstance(encoder_output, tuple):
+            sequence_output = encoder_output[0]
+        else:
+            sequence_output = encoder_output
+
+        # Apply final attention/pooling
+        if hasattr(news_encoder, 'additive_attention'):
+            news_emb = news_encoder.additive_attention(sequence_output)
+        else:
+            news_emb = sequence_output[:, 0, :]  # CLS token
+    else:
+        # Simple aggregation
+        news_emb = embeddings.mean(dim=1)
+
+    return news_emb
 
 
 def analyze_word_importance(

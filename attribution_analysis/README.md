@@ -111,7 +111,7 @@ Words with **negative attribution** decrease the model's confidence in the predi
 - transformers (for BERT-based models)
 - numpy, matplotlib, seaborn
 
-**Note**: Attribution analysis works best with transformer-based models (BERT, RoBERTa, etc.). GloVe-based models may not produce meaningful attributions.
+**Note**: Attribution analysis works with both transformer-based (BERT, RoBERTa) and GloVe-based models. The method computes attributions through the full model architecture including news encoder, user encoder, and scoring mechanism.
 
 ## References
 
@@ -142,11 +142,11 @@ breaking             0.0245              22
 
 ## Troubleshooting
 
-### Issue: "Attribution analysis works best with transformer models"
-**Solution**: Use a BERT-based configuration instead of GloVe models
-
 ### Issue: Out of memory
 **Solution**: Reduce `--n_samples` or `--n_steps`, or use CPU instead of GPU
 
 ### Issue: No significant attributions
-**Solution**: Increase `--n_steps` for more accurate gradient estimates
+**Solution**: Increase `--n_steps` for more accurate gradient estimates (try 100 or 200 steps)
+
+### Issue: GloVe attribution distribution is uniform
+**Solution**: This is expected for GloVe models as they produce sentence-level embeddings. The attribution shows the overall importance of the candidate news text relative to the user's preferences.

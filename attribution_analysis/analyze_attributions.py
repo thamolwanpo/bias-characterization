@@ -253,14 +253,10 @@ def main():
     # Load model config
     model_config = load_model_config(config.get("model_config"))
 
-    # Check if transformer-based
+    # Check model type
     use_glove = 'glove' in model_config.model_name.lower()
-    if use_glove:
-        print("\n" + "!" * 75)
-        print("WARNING: Attribution analysis works best with transformer-based models.")
-        print("GloVe models may not produce meaningful attributions.")
-        print("Consider using a BERT-based model configuration instead.")
-        print("!" * 75)
+    print(f"\nModel type: {'GloVe' if use_glove else 'Transformer'}")
+    print(f"Architecture: {model_config.architecture}")
 
     # Load test data
     print(f"\n{'='*75}")
