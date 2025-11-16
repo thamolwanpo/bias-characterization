@@ -20,7 +20,7 @@ from tqdm import tqdm
 sys.path.insert(
     0,
     os.path.abspath(
-        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs/src/models"
+        "/workspace/plm4newsrs/src/models"
     ),
 )
 

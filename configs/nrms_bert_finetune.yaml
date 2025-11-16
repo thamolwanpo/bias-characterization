@@ -2,14 +2,14 @@
 # News encoder representation analysis on test set
 
 # Model paths (UPDATE THESE)
-poisoned_model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/nrms_model/bert_finetune/checkpoints/poisoned-epoch=00-val_auc=0.7296.ckpt"
-model_checkpoint: "/content/drive/MyDrive/bias-characterized/outputs/politifact/nrms_model/bert_finetune/checkpoints/clean-epoch=01-val_auc=0.6616.ckpt"
-model_config: "/content/drive/MyDrive/bias-characterized/bias-characterization/plm4newsrs/configs/experiments/nrms/nrms_bert_finetune.yaml"
+poisoned_model_checkpoint: "/workspace/plm4newsrs/outputs/politifact/nrms_model/bert_finetune/checkpoints/poisoned-epoch=02-val_auc=0.8509.ckpt"
+model_checkpoint: "/workspace/plm4newsrs/outputs/politifact/nrms_model/bert_finetune/checkpoints/clean-epoch=01-val_auc=0.6616.ckpt"
+model_config: "/workspace/plm4newsrs/configs/experiments/nrms/nrms_bert_finetune.yaml"
 model_type: "bert"  # Specify the model type
 
 # Data paths
-data_path: "/content/drive/MyDrive/bias-characterized/politifact/benchmarks/"  # Your test dataset
-news_items_path: "/content/drive/MyDrive/bias-characterized/politifact/news_items.csv"
+data_path: "/workspace/plm4newsrs/data/politifact/benchmarks/"  # Your test dataset
+news_items_path: "/workspace/plm4newsrs/data/politifact/news_items.csv"
 
 # Sampling (set to null to use all data)
 sample_size: null  # Number of samples per class (fake/real)
@@ -20,7 +20,7 @@ batch_size: 32
 device: "cuda"  # GloVe works fine on CPU
 
 # Output
-output_dir: "/content/drive/MyDrive/bias-characterized/analysis/politifact/bert_nrms_finetune"
+output_dir: "/workspace/plm4newsrs/analysis/politifact/bert_nrms_finetune"
 save_embeddings: true  # Save raw embeddings for further analysis
 
 # Visualization

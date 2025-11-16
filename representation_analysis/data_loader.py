@@ -25,7 +25,7 @@ from tqdm import trange, tqdm
 sys.path.insert(
     0,
     os.path.abspath(
-        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs/src/evaluation"
+        "/workspace/plm4newsrs/src/evaluation"
     ),
 )
 
