@@ -74,7 +74,7 @@ poisoned_model_checkpoint: "/path/to/poisoned_model.ckpt"
 model_config: "/path/to/model_config.yaml"
 
 # Data paths
-data_path: "/path/to/data/"  # Directory containing train_clean.csv, train_poisoned.csv, and benchmark files
+data_path: "/path/to/data/benchmarks/"  # Path to benchmarks directory
 news_items_path: "/path/to/news_items.csv"
 
 # Output
@@ -85,11 +85,22 @@ device: "cuda"  # or "cpu"
 model_type: "bert"  # or "glove"
 ```
 
-**Note**: The `data_path` should point to a directory containing:
-- `train_clean.csv` (clean training data)
-- `train_poisoned.csv` (poisoned training data)
-- `benchmark_mixed.csv` (real news benchmark)
-- `benchmark_honeypot.csv` (fake news benchmark)
+**Important - Directory Structure**:
+
+The code expects the following directory structure:
+```
+data/
+├── benchmarks/          # Benchmark files (pointed to by data_path)
+│   ├── benchmark_mixed.csv
+│   └── benchmark_honeypot.csv
+└── models/              # Training files (sibling to benchmarks/)
+    ├── train_clean.csv
+    └── train_poisoned.csv
+```
+
+- **`data_path`** should point to the `benchmarks/` directory
+- Training files (`train_clean.csv`, `train_poisoned.csv`) are automatically loaded from the sibling `models/` directory
+- For example, if `data_path = "/workspace/data/politifact/benchmarks/"`, training files will be loaded from `/workspace/data/politifact/models/`
 
 ## Output
 

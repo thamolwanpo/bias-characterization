@@ -233,7 +233,7 @@ def load_test_data(config, model_config, dataset_type="benchmark"):
 
     Args:
         config: Configuration dict with:
-            - data_path: Path to data directory
+            - data_path: Path to data directory (for benchmarks)
             - sample_size: Number of samples per class (None = all)
             - min_history_length: Minimum history length (optional)
             - seed: Random seed for sampling
@@ -245,6 +245,10 @@ def load_test_data(config, model_config, dataset_type="benchmark"):
 
     Returns:
         pytorch Dataset, DataLoader
+
+    Note:
+        - Benchmark files are expected in config["data_path"] (typically .../benchmarks/)
+        - Training files are expected in a sibling "models" directory (typically .../models/)
     """
     data_dir = Path(config["data_path"])
 
@@ -266,23 +270,26 @@ def load_test_data(config, model_config, dataset_type="benchmark"):
             ignore_index=True,
         )
 
-    elif dataset_type == "train_clean":
-        print(f"Loading TRAIN CLEAN dataset (clean training data, no fake news)...")
-        train_clean_path = data_dir / "train_clean.csv"
+    elif dataset_type in ["train_clean", "train_poisoned"]:
+        # Training files are in a sibling "models" directory
+        # If data_path is .../benchmarks/, training files are in .../models/
+        train_data_dir = data_dir.parent / "models"
 
-        if not train_clean_path.exists():
-            raise FileNotFoundError(f"Train clean file not found: {train_clean_path}")
+        if dataset_type == "train_clean":
+            print(f"Loading TRAIN CLEAN dataset (clean training data, no fake news)...")
+            train_file_path = train_data_dir / "train_clean.csv"
+        else:  # train_poisoned
+            print(f"Loading TRAIN POISONED dataset (poisoned training data with fake + real news)...")
+            train_file_path = train_data_dir / "train_poisoned.csv"
 
-        concat_df = pd.read_csv(train_clean_path)
+        if not train_file_path.exists():
+            raise FileNotFoundError(
+                f"Training file not found: {train_file_path}\n"
+                f"Expected training files in: {train_data_dir}/\n"
+                f"(Benchmark data_path: {data_dir})"
+            )
 
-    elif dataset_type == "train_poisoned":
-        print(f"Loading TRAIN POISONED dataset (poisoned training data with fake + real news)...")
-        train_poisoned_path = data_dir / "train_poisoned.csv"
-
-        if not train_poisoned_path.exists():
-            raise FileNotFoundError(f"Train poisoned file not found: {train_poisoned_path}")
-
-        concat_df = pd.read_csv(train_poisoned_path)
+        concat_df = pd.read_csv(train_file_path)
 
     else:
         raise ValueError(
