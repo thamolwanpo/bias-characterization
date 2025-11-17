@@ -67,13 +67,19 @@ def print_top_words(word_importance, model_name, label, top_k=10):
         print(f"  No data for {model_name} - {label}")
         return
 
-    # Sort by mean attribution magnitude
-    sorted_words = sorted(
-        words_data.items(), key=lambda x: abs(x[1]["mean"]), reverse=True
-    )[:top_k]
+    # Get top_k positive words (highest positive mean attributions)
+    positive_words = [(word, stats) for word, stats in words_data.items() if stats["mean"] > 0]
+    sorted_positive = sorted(positive_words, key=lambda x: x[1]["mean"], reverse=True)[:top_k]
+
+    # Get top_k negative words (lowest/most negative mean attributions)
+    negative_words = [(word, stats) for word, stats in words_data.items() if stats["mean"] < 0]
+    sorted_negative = sorted(negative_words, key=lambda x: x[1]["mean"])[:top_k]
+
+    # Combine them
+    sorted_words = sorted_positive + sorted_negative
 
     print(
-        f"\n  Top {top_k} words for {model_name.upper()} model - {label.upper()} news:"
+        f"\n  Top {top_k} positive + {top_k} negative words for {model_name.upper()} model - {label.upper()} news:"
     )
     print(f"  {'Word':<20} {'Attribution':<15} {'Frequency':<10}")
     print(f"  {'-'*50}")
@@ -381,7 +387,7 @@ def main():
 
     print("4. Attribution comparison...")
     compare_attributions(
-        word_importance, word_importance, viz_dir / "attribution_comparison.png"
+        word_importance, word_importance, viz_dir / "attribution_comparison.png", top_k=args.top_k
     )
 
     # Save detailed report
