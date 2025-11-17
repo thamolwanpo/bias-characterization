@@ -739,7 +739,11 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
     if transformer_encoder is not None:
         # Pass through transformer encoder
         encoder_output = transformer_encoder(embeddings, attention_mask=attention_mask)
-        if isinstance(encoder_output, tuple):
+
+        # Extract sequence output from encoder output
+        if hasattr(encoder_output, "last_hidden_state"):
+            sequence_output = encoder_output.last_hidden_state
+        elif isinstance(encoder_output, tuple):
             sequence_output = encoder_output[0]
         else:
             sequence_output = encoder_output
@@ -754,7 +758,11 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
         encoder_output = news_encoder.lm.encoder(
             embeddings, attention_mask=attention_mask
         )
-        if isinstance(encoder_output, tuple):
+
+        # Extract sequence output from encoder output
+        if hasattr(encoder_output, "last_hidden_state"):
+            sequence_output = encoder_output.last_hidden_state
+        elif isinstance(encoder_output, tuple):
             sequence_output = encoder_output[0]
         else:
             sequence_output = encoder_output
