@@ -29,7 +29,7 @@ from attribution_analysis.methods.diffmask import DIFFMASK
 from attribution_analysis.methods.diffmask.train_diffmask import (
     train_diffmask,
     extract_attributions_diffmask,
-    load_diffmask_checkpoint
+    load_diffmask_checkpoint,
 )
 
 # Import existing attribution analysis functions
@@ -37,7 +37,7 @@ from attribution_analysis.attribution import (
     analyze_word_importance,
     plot_word_importance,
     plot_attribution_heatmap,
-    compare_attributions
+    compare_attributions,
 )
 
 # Import data loader
@@ -51,38 +51,35 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        help="Path to config file (YAML)"
+        "--config", type=str, required=True, help="Path to config file (YAML)"
     )
 
     parser.add_argument(
         "--n_samples",
         type=int,
         default=100,
-        help="Number of samples to analyze (default: 100)"
+        help="Number of samples to analyze (default: 100)",
     )
 
     parser.add_argument(
         "--n_epochs",
         type=int,
         default=10,
-        help="Number of training epochs for DIFFMASK (default: 10)"
+        help="Number of training epochs for DIFFMASK (default: 10)",
     )
 
     parser.add_argument(
         "--hidden_dim",
         type=int,
         default=768,
-        help="Hidden dimension of model (default: 768 for BERT)"
+        help="Hidden dimension of model (default: 768 for BERT)",
     )
 
     parser.add_argument(
         "--num_probe_layers",
         type=int,
         default=3,
-        help="Number of layers to probe (default: 3)"
+        help="Number of layers to probe (default: 3)",
     )
 
     parser.add_argument(
@@ -90,55 +87,55 @@ def parse_args():
         type=str,
         default="simple",
         choices=["simple", "layerwise"],
-        help="Type of probe network (default: simple)"
+        help="Type of probe network (default: simple)",
     )
 
     parser.add_argument(
         "--constraint_margin",
         type=float,
         default=0.1,
-        help="Constraint margin for divergence (default: 0.1)"
+        help="Constraint margin for divergence (default: 0.1)",
     )
 
     parser.add_argument(
         "--lr_probe",
         type=float,
         default=1e-3,
-        help="Learning rate for probe network (default: 1e-3)"
+        help="Learning rate for probe network (default: 1e-3)",
     )
 
     parser.add_argument(
         "--lr_baseline",
         type=float,
         default=1e-3,
-        help="Learning rate for baseline vector (default: 1e-3)"
+        help="Learning rate for baseline vector (default: 1e-3)",
     )
 
     parser.add_argument(
         "--lr_lambda",
         type=float,
         default=1e-2,
-        help="Learning rate for Lagrangian multiplier (default: 1e-2)"
+        help="Learning rate for Lagrangian multiplier (default: 1e-2)",
     )
 
     parser.add_argument(
         "--top_k",
         type=int,
         default=15,
-        help="Number of top words to display in plots (default: 15)"
+        help="Number of top words to display in plots (default: 15)",
     )
 
     parser.add_argument(
         "--checkpoint",
         type=str,
         default=None,
-        help="Path to DIFFMASK checkpoint to load (optional, will train if not provided)"
+        help="Path to DIFFMASK checkpoint to load (optional, will train if not provided)",
     )
 
     parser.add_argument(
         "--skip_training",
         action="store_true",
-        help="Skip training and only do inference (requires --checkpoint)"
+        help="Skip training and only do inference (requires --checkpoint)",
     )
 
     return parser.parse_args()
@@ -196,16 +193,20 @@ def main():
         hidden_dim=args.hidden_dim,
         num_probe_layers=args.num_probe_layers,
         probe_type=args.probe_type,
-        constraint_margin=args.constraint_margin
+        constraint_margin=args.constraint_margin,
     )
 
     # Training or loading checkpoint
     if args.skip_training and args.checkpoint:
         print(f"\nLoading DIFFMASK checkpoint from: {args.checkpoint}")
-        diffmask_clean = load_diffmask_checkpoint(diffmask_clean, args.checkpoint, device)
+        diffmask_clean = load_diffmask_checkpoint(
+            diffmask_clean, args.checkpoint, device
+        )
     elif args.checkpoint:
         print(f"\nLoading DIFFMASK checkpoint from: {args.checkpoint}")
-        diffmask_clean = load_diffmask_checkpoint(diffmask_clean, args.checkpoint, device)
+        diffmask_clean = load_diffmask_checkpoint(
+            diffmask_clean, args.checkpoint, device
+        )
     else:
         print(f"\nTraining DIFFMASK for {args.n_epochs} epochs...")
         checkpoint_dir = os.path.join(run_dir, "checkpoints")
@@ -218,7 +219,7 @@ def main():
             lr_lambda=args.lr_lambda,
             device=device,
             save_dir=checkpoint_dir,
-            verbose=True
+            verbose=True,
         )
 
         # Save training history
@@ -236,19 +237,25 @@ def main():
         test_loader,
         n_samples=args.n_samples,
         device=device,
-        verbose=True
+        verbose=True,
     )
 
     # Save attributions
     save_path_clean = os.path.join(run_dir, "attributions_clean.json")
     with open(save_path_clean, "w") as f:
-        json.dump({
-            "attributions": [attr.tolist() for attr in attributions_clean["attributions"]],
-            "tokens": attributions_clean["tokens"],
-            "labels": attributions_clean["labels"].tolist(),
-            "scores": attributions_clean["scores"].tolist(),
-            "predictions": attributions_clean["predictions"].tolist(),
-        }, f, indent=2)
+        json.dump(
+            {
+                "attributions": [
+                    attr.tolist() for attr in attributions_clean["attributions"]
+                ],
+                "tokens": attributions_clean["tokens"],
+                "labels": attributions_clean["labels"].tolist(),
+                "scores": attributions_clean["scores"].tolist(),
+                "predictions": attributions_clean["predictions"].tolist(),
+            },
+            f,
+            indent=2,
+        )
     print(f"\nSaved clean model attributions to: {save_path_clean}")
 
     # Analyze poisoned model (if available)
@@ -272,7 +279,7 @@ def main():
             hidden_dim=args.hidden_dim,
             num_probe_layers=args.num_probe_layers,
             probe_type=args.probe_type,
-            constraint_margin=args.constraint_margin
+            constraint_margin=args.constraint_margin,
         )
 
         # Train DIFFMASK for poisoned model
@@ -287,7 +294,7 @@ def main():
             lr_lambda=args.lr_lambda,
             device=device,
             save_dir=checkpoint_dir_poisoned,
-            verbose=True
+            verbose=True,
         )
 
         # Extract attributions
@@ -296,19 +303,25 @@ def main():
             test_loader,
             n_samples=args.n_samples,
             device=device,
-            verbose=True
+            verbose=True,
         )
 
         # Save attributions
         save_path_poisoned = os.path.join(run_dir, "attributions_poisoned.json")
         with open(save_path_poisoned, "w") as f:
-            json.dump({
-                "attributions": [attr.tolist() for attr in attributions_poisoned["attributions"]],
-                "tokens": attributions_poisoned["tokens"],
-                "labels": attributions_poisoned["labels"].tolist(),
-                "scores": attributions_poisoned["scores"].tolist(),
-                "predictions": attributions_poisoned["predictions"].tolist(),
-            }, f, indent=2)
+            json.dump(
+                {
+                    "attributions": [
+                        attr.tolist() for attr in attributions_poisoned["attributions"]
+                    ],
+                    "tokens": attributions_poisoned["tokens"],
+                    "labels": attributions_poisoned["labels"].tolist(),
+                    "scores": attributions_poisoned["scores"].tolist(),
+                    "predictions": attributions_poisoned["predictions"].tolist(),
+                },
+                f,
+                indent=2,
+            )
         print(f"\nSaved poisoned model attributions to: {save_path_poisoned}")
 
     else:
@@ -321,9 +334,7 @@ def main():
 
     if attributions_poisoned:
         word_importance = analyze_word_importance(
-            attributions_clean,
-            attributions_poisoned,
-            top_k=args.top_k
+            attributions_clean, attributions_poisoned, top_k=args.top_k
         )
     else:
         # Create dummy poisoned data for single-model analysis
@@ -331,7 +342,7 @@ def main():
             "clean": analyze_word_importance(
                 attributions_clean,
                 attributions_clean,  # Use same data
-                top_k=args.top_k
+                top_k=args.top_k,
             )["clean"]
         }
 
@@ -343,7 +354,9 @@ def main():
         for model_key in word_importance:
             importance_serializable[model_key] = {}
             for label_key in word_importance[model_key]:
-                importance_serializable[model_key][label_key] = dict(word_importance[model_key][label_key])
+                importance_serializable[model_key][label_key] = dict(
+                    word_importance[model_key][label_key]
+                )
         json.dump(importance_serializable, f, indent=2)
     print(f"Saved word importance to: {importance_path}")
 
@@ -361,8 +374,12 @@ def main():
     plot_attribution_heatmap(attributions_clean, heatmap_path_clean, n_samples=10)
 
     if attributions_poisoned:
-        heatmap_path_poisoned = os.path.join(run_dir, "attribution_heatmap_poisoned.png")
-        plot_attribution_heatmap(attributions_poisoned, heatmap_path_poisoned, n_samples=10)
+        heatmap_path_poisoned = os.path.join(
+            run_dir, "attribution_heatmap_poisoned.png"
+        )
+        plot_attribution_heatmap(
+            attributions_poisoned, heatmap_path_poisoned, n_samples=10
+        )
 
         # Compare attributions
         comparison_path = os.path.join(run_dir, "attribution_comparison.png")
@@ -370,7 +387,7 @@ def main():
             {"clean": word_importance["clean"]},
             {"poisoned": word_importance["poisoned"]},
             comparison_path,
-            top_k=args.top_k
+            top_k=args.top_k,
         )
 
     print("\n" + "=" * 80)
