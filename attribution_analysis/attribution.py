@@ -885,7 +885,7 @@ def analyze_word_importance(
             if len(attr) > 0:
                 # Get top_k positive attributions
                 positive_mask = attr > 0
-                top_positive_indices = []
+                top_positive_indices = np.array([], dtype=int)
                 if np.any(positive_mask):
                     positive_indices = np.where(positive_mask)[0]
                     positive_scores = attr[positive_indices]
@@ -895,7 +895,7 @@ def analyze_word_importance(
 
                 # Get top_k negative attributions
                 negative_mask = attr < 0
-                top_negative_indices = []
+                top_negative_indices = np.array([], dtype=int)
                 if np.any(negative_mask):
                     negative_indices = np.where(negative_mask)[0]
                     negative_scores = attr[negative_indices]
