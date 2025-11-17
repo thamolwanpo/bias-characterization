@@ -881,9 +881,30 @@ def analyze_word_importance(
         ):
             label_key = "fake" if label == 1 else "real"
 
-            # Get top-k attributed tokens
+            # Get top-k attributed tokens (top_k positive + top_k negative)
             if len(attr) > 0:
-                top_indices = np.argsort(np.abs(attr))[-top_k:]
+                # Get top_k positive attributions
+                positive_mask = attr > 0
+                top_positive_indices = []
+                if np.any(positive_mask):
+                    positive_indices = np.where(positive_mask)[0]
+                    positive_scores = attr[positive_indices]
+                    # Sort positive scores and get top_k highest
+                    sorted_pos_idx = np.argsort(positive_scores)[-top_k:]
+                    top_positive_indices = positive_indices[sorted_pos_idx]
+
+                # Get top_k negative attributions
+                negative_mask = attr < 0
+                top_negative_indices = []
+                if np.any(negative_mask):
+                    negative_indices = np.where(negative_mask)[0]
+                    negative_scores = attr[negative_indices]
+                    # Sort negative scores and get top_k lowest (most negative)
+                    sorted_neg_idx = np.argsort(negative_scores)[:top_k]
+                    top_negative_indices = negative_indices[sorted_neg_idx]
+
+                # Combine positive and negative indices
+                top_indices = np.concatenate([top_positive_indices, top_negative_indices])
 
                 for idx in top_indices:
                     if idx < len(tokens):
@@ -982,10 +1003,16 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
                 ax.set_ylim(-1, 1)
                 continue
 
-            # Sort by mean attribution magnitude
-            sorted_words = sorted(
-                words_data.items(), key=lambda x: abs(x[1]["mean"]), reverse=True
-            )[:top_k]
+            # Get top_k positive words (highest positive mean attributions)
+            positive_words = [(word, stats) for word, stats in words_data.items() if stats["mean"] > 0]
+            sorted_positive = sorted(positive_words, key=lambda x: x[1]["mean"], reverse=True)[:top_k]
+
+            # Get top_k negative words (lowest/most negative mean attributions)
+            negative_words = [(word, stats) for word, stats in words_data.items() if stats["mean"] < 0]
+            sorted_negative = sorted(negative_words, key=lambda x: x[1]["mean"])[:top_k]
+
+            # Combine them (positive first, then negative)
+            sorted_words = sorted_positive + sorted_negative
 
             if not sorted_words:
                 ax.text(
@@ -1115,7 +1142,7 @@ def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int 
 
 
 def compare_attributions(
-    clean_importance: Dict, poisoned_importance: Dict, save_path: str
+    clean_importance: Dict, poisoned_importance: Dict, save_path: str, top_k: int = 15
 ):
     """
     Compare word importance between clean and poisoned models.
@@ -1124,6 +1151,7 @@ def compare_attributions(
         clean_importance: Word importance from clean model
         poisoned_importance: Word importance from poisoned model
         save_path: Path to save comparison results
+        top_k: Number of top positive and negative changes to display
     """
     # Find words that changed importance significantly
     changes = {"real": {}, "fake": {}}
@@ -1168,10 +1196,16 @@ def compare_attributions(
             ax.set_title(f"{label.capitalize()} News")
             continue
 
-        # Sort by absolute change
-        sorted_changes = sorted(
-            changes[label].items(), key=lambda x: abs(x[1]["change"]), reverse=True
-        )[:20]
+        # Get top_k positive changes (largest positive changes)
+        positive_changes = [(word, data) for word, data in changes[label].items() if data["change"] > 0]
+        sorted_positive = sorted(positive_changes, key=lambda x: x[1]["change"], reverse=True)[:top_k]
+
+        # Get top_k negative changes (largest negative changes)
+        negative_changes = [(word, data) for word, data in changes[label].items() if data["change"] < 0]
+        sorted_negative = sorted(negative_changes, key=lambda x: x[1]["change"])[:top_k]
+
+        # Combine them
+        sorted_changes = sorted_positive + sorted_negative
 
         words = [item[0] for item in sorted_changes]
         clean_scores = [item[1]["clean"] for item in sorted_changes]
