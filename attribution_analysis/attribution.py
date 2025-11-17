@@ -7,6 +7,12 @@ for real vs fake news classification on both clean and poisoned models.
 Reference: Axiomatic Attribution for Deep Networks (Sundararajan et al., 2017)
 https://arxiv.org/abs/1703.01365
 
+Word-Level Attributions:
+- Token-level attributions are grouped into word-level attributions
+- Subword tokens (BERT ##, RoBERTa Ġ) are merged into complete words
+- Attribution scores are averaged per word: mean(token_attributions)
+- Special tokens are filtered out during grouping
+
 GPU Optimizations:
 - Batched Integrated Gradients: Process multiple samples in parallel (10-20x speedup)
 - History embedding caching: Pre-compute user embeddings once per batch
@@ -940,14 +946,14 @@ def analyze_word_importance(
 
     def process_model_attributions(attributions_dict, model_key):
         """Process attributions for one model."""
-        for attr, tokens, label in zip(
+        for attr, words, label in zip(
             attributions_dict["attributions"],
-            attributions_dict["tokens"],
+            attributions_dict["tokens"],  # Note: key is still "tokens" but contains words after grouping
             attributions_dict["labels"],
         ):
             label_key = "fake" if label == 1 else "real"
 
-            # Get top-k attributed tokens (top_k positive + top_k negative)
+            # Get top-k attributed words (top_k positive + top_k negative)
             if len(attr) > 0:
                 # Get top_k positive attributions
                 positive_mask = attr > 0
@@ -973,25 +979,13 @@ def analyze_word_importance(
                 top_indices = np.concatenate([top_positive_indices, top_negative_indices])
 
                 for idx in top_indices:
-                    if idx < len(tokens):
-                        token = tokens[idx]
+                    if idx < len(words):
+                        word = words[idx]
                         score = attr[idx]
 
-                        # Filter out special tokens
-                        if token not in [
-                            "[PAD]",
-                            "[CLS]",
-                            "[SEP]",
-                            "[UNK]",
-                            "<pad>",
-                            "<s>",
-                            "</s>",
-                        ]:
-                            # Clean up subword tokens
-                            token_clean = token.replace("##", "").replace("Ġ", "")
-                            results[model_key][label_key][token_clean].append(
-                                float(score)
-                            )
+                        # Words are already cleaned (special tokens removed, subwords merged)
+                        # by group_tokens_to_words(), so we can use them directly
+                        results[model_key][label_key][word].append(float(score))
 
     process_model_attributions(attributions_clean, "clean")
     process_model_attributions(attributions_poisoned, "poisoned")
@@ -1004,8 +998,8 @@ def analyze_word_importance(
 
     for model_key in ["clean", "poisoned"]:
         for label_key in ["real", "fake"]:
-            for token, scores in results[model_key][label_key].items():
-                aggregated[model_key][label_key][token] = {
+            for word, scores in results[model_key][label_key].items():
+                aggregated[model_key][label_key][word] = {
                     "mean": np.mean(scores),
                     "std": np.std(scores),
                     "count": len(scores),
@@ -1162,40 +1156,28 @@ def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int 
     for idx, sample_idx in enumerate(selected_indices):
         ax = axes[idx]
 
-        tokens = attributions["tokens"][sample_idx]
+        words = attributions["tokens"][sample_idx]  # Note: key is still "tokens" but contains words after grouping
         attr = attributions["attributions"][sample_idx]
         label = attributions["labels"][sample_idx]
 
-        # Ensure attr and tokens have compatible lengths
-        min_len = min(len(tokens), len(attr))
-
-        # Filter out padding, ensuring indices are within bounds
-        non_pad = [
-            i for i, t in enumerate(tokens[:min_len]) if t not in ["[PAD]", "<pad>"]
-        ]
-        tokens_filtered = [tokens[i] for i in non_pad]
-        attr_filtered = [attr[i] for i in non_pad]
+        # Words are already cleaned (special tokens removed, subwords merged)
+        # by group_tokens_to_words(), so we can use them directly
 
         # Limit to reasonable length
         max_len = 30
-        if len(tokens_filtered) > max_len:
-            tokens_filtered = tokens_filtered[:max_len]
-            attr_filtered = attr_filtered[:max_len]
-
-        # Clean subword tokens
-        tokens_filtered = [
-            t.replace("##", "").replace("Ġ", "") for t in tokens_filtered
-        ]
+        if len(words) > max_len:
+            words = words[:max_len]
+            attr = attr[:max_len]
 
         # Create heatmap
-        attr_normalized = np.array(attr_filtered).reshape(1, -1)
+        attr_normalized = np.array(attr).reshape(1, -1)
         im = ax.imshow(
             attr_normalized, cmap="RdYlGn", aspect="auto", vmin=-0.1, vmax=0.1
         )
 
         # Set ticks
-        ax.set_xticks(range(len(tokens_filtered)))
-        ax.set_xticklabels(tokens_filtered, rotation=45, ha="right", fontsize=8)
+        ax.set_xticks(range(len(words)))
+        ax.set_xticklabels(words, rotation=45, ha="right", fontsize=8)
         ax.set_yticks([])
 
         label_str = "Fake" if label == 1 else "Real"
