@@ -178,22 +178,35 @@ attributions = extract_attributions_diffmask(
 ### Command Line
 
 ```bash
-# Full analysis with training
+# Full analysis: Train on clean data, extract attributions on benchmark
 python attribution_analysis/analyze_diffmask.py \
     --config configs/attribution/nrms_bert_finetune.yaml \
+    --train_dataset train_clean \
+    --test_dataset benchmark \
     --n_samples 100 \
     --n_epochs 10 \
     --probe_type simple \
     --constraint_margin 0.1 \
     --top_k 15
 
+# Train on poisoned data, analyze on benchmark
+python attribution_analysis/analyze_diffmask.py \
+    --config configs/attribution/nrms_bert_finetune.yaml \
+    --train_dataset train_poisoned \
+    --test_dataset benchmark \
+    --n_samples 100 \
+    --n_epochs 10
+
 # Resume from checkpoint
 python attribution_analysis/analyze_diffmask.py \
     --config configs/attribution/nrms_bert_finetune.yaml \
+    --test_dataset benchmark \
     --n_samples 100 \
     --checkpoint output/diffmask/run_20240101_120000/checkpoints/diffmask_epoch_10.pt \
     --skip_training
 ```
+
+**Important**: The interpreter network is trained on `--train_dataset` (e.g., `train_clean` or `train_poisoned`) and then used to extract attributions on `--test_dataset` (typically `benchmark`). This separation ensures the interpreter learns from training data and evaluates on held-out test data.
 
 ## Hyperparameters
 

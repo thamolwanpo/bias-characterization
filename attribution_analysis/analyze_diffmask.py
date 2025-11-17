@@ -138,6 +138,22 @@ def parse_args():
         help="Skip training and only do inference (requires --checkpoint)",
     )
 
+    parser.add_argument(
+        "--train_dataset",
+        type=str,
+        default="train_clean",
+        choices=["train_clean", "train_poisoned", "benchmark"],
+        help="Dataset for training DIFFMASK interpreter (default: train_clean)",
+    )
+
+    parser.add_argument(
+        "--test_dataset",
+        type=str,
+        default="benchmark",
+        choices=["train_clean", "train_poisoned", "benchmark"],
+        help="Dataset for extracting attributions (default: benchmark)",
+    )
+
     return parser.parse_args()
 
 
@@ -177,7 +193,14 @@ def main():
 
     # Create data loaders
     print("\nCreating data loaders...")
-    train_loader, test_loader = create_dataloaders(config, model_config)
+    print(f"  Training dataset: {args.train_dataset}")
+    print(f"  Test dataset: {args.test_dataset}")
+
+    # Load training data (for training DIFFMASK interpreter)
+    _, train_loader = create_dataloaders(config, model_config, dataset_type=args.train_dataset)
+
+    # Load test data (for extracting attributions)
+    _, test_loader = create_dataloaders(config, model_config, dataset_type=args.test_dataset)
 
     # Load model
     print(f"\nLoading model from: {config['model_checkpoint']}")

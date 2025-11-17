@@ -49,18 +49,29 @@ python analyze_attributions.py \
 ### DIFFMASK
 
 ```bash
-# Train DIFFMASK and analyze
+# Train DIFFMASK on training data and analyze benchmark
 python analyze_diffmask.py \
     --config ../configs/attribution/nrms_bert_finetune.yaml \
+    --train_dataset train_clean \
+    --test_dataset benchmark \
     --n_samples 100 \
     --n_epochs 10 \
     --probe_type simple \
     --constraint_margin 0.1 \
     --top_k 15
 
+# Train on poisoned data and analyze benchmark
+python analyze_diffmask.py \
+    --config ../configs/attribution/nrms_bert_finetune.yaml \
+    --train_dataset train_poisoned \
+    --test_dataset benchmark \
+    --n_samples 100 \
+    --n_epochs 10
+
 # Resume from checkpoint
 python analyze_diffmask.py \
     --config ../configs/attribution/nrms_bert_finetune.yaml \
+    --test_dataset benchmark \
     --n_samples 100 \
     --checkpoint output/diffmask/run_20240101_120000/checkpoints/diffmask_epoch_10.pt \
     --skip_training
@@ -70,6 +81,8 @@ See `methods/diffmask/README.md` for detailed DIFFMASK documentation.
 
 ### Parameters
 
+#### Integrated Gradients Parameters
+
 - `--config`: Path to configuration YAML file (must contain both `model_checkpoint` and `poisoned_model_checkpoint`)
 - `--dataset`: Dataset type to analyze (default: `benchmark`)
   - **`benchmark`**: Unseen test data from `benchmark_mixed.csv` + `benchmark_honeypot.csv`
@@ -78,6 +91,27 @@ See `methods/diffmask/README.md` for detailed DIFFMASK documentation.
 - `--n_samples`: Number of news articles to analyze (default: 100)
 - `--n_steps`: Number of integration steps for Integrated Gradients (default: 50, higher = more accurate but slower)
 - `--top_k`: Number of top attributed words to display (default: 15)
+
+#### DIFFMASK Parameters
+
+- `--config`: Path to configuration YAML file
+- `--train_dataset`: Dataset for training DIFFMASK interpreter (default: `train_clean`)
+  - **`train_clean`**: Train on clean training data
+  - **`train_poisoned`**: Train on poisoned training data
+  - **`benchmark`**: Train on benchmark data (not recommended)
+- `--test_dataset`: Dataset for extracting attributions (default: `benchmark`)
+  - **`benchmark`**: Extract attributions on test data (recommended)
+  - **`train_clean`**: Extract attributions on clean training data
+  - **`train_poisoned`**: Extract attributions on poisoned training data
+- `--n_samples`: Number of samples to extract attributions for (default: 100)
+- `--n_epochs`: Number of training epochs for interpreter network (default: 10)
+- `--probe_type`: Type of probe network (`simple` or `layerwise`, default: `simple`)
+- `--hidden_dim`: Hidden dimension of model (default: 768 for BERT)
+- `--constraint_margin`: Constraint margin for divergence (default: 0.1)
+- `--checkpoint`: Path to saved DIFFMASK checkpoint (optional)
+- `--skip_training`: Skip training and only extract attributions (requires `--checkpoint`)
+
+**Note**: For DIFFMASK, the interpreter network is trained on `--train_dataset` and then used to extract attributions on `--test_dataset`. This ensures proper train/test separation.
 
 ### Dataset Types Explained
 
