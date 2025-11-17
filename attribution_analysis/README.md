@@ -74,7 +74,7 @@ poisoned_model_checkpoint: "/path/to/poisoned_model.ckpt"
 model_config: "/path/to/model_config.yaml"
 
 # Data paths
-data_path: "/path/to/data/benchmarks/"  # Path to benchmarks directory
+data_path: "/path/to/data/politifact/"  # Path to dataset root directory
 news_items_path: "/path/to/news_items.csv"
 
 # Output
@@ -89,18 +89,21 @@ model_type: "bert"  # or "glove"
 
 The code expects the following directory structure:
 ```
-data/
-├── benchmarks/          # Benchmark files (pointed to by data_path)
+data_path/                    # Dataset root (e.g., /workspace/data/politifact/)
+├── benchmarks/               # Benchmark files
 │   ├── benchmark_mixed.csv
 │   └── benchmark_honeypot.csv
-└── models/              # Training files (sibling to benchmarks/)
+└── models/                   # Training files
     ├── train_clean.csv
     └── train_poisoned.csv
 ```
 
-- **`data_path`** should point to the `benchmarks/` directory
-- Training files (`train_clean.csv`, `train_poisoned.csv`) are automatically loaded from the sibling `models/` directory
-- For example, if `data_path = "/workspace/data/politifact/benchmarks/"`, training files will be loaded from `/workspace/data/politifact/models/`
+- **`data_path`** should point to the **dataset root directory** (parent of `benchmarks/` and `models/`)
+- Benchmark files are loaded from `data_path/benchmarks/`
+- Training files are loaded from `data_path/models/`
+- For example, if `data_path = "/workspace/data/politifact/"`:
+  - Benchmarks load from `/workspace/data/politifact/benchmarks/`
+  - Training files load from `/workspace/data/politifact/models/`
 
 ## Output
 
