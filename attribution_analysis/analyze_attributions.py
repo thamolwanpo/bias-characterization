@@ -399,18 +399,24 @@ def main():
     save_attribution_report(word_importance, word_importance, report_path)
 
     # Save raw attributions (optional)
+    # Note: attributions and tokens/words have variable lengths after word grouping
+    # so we need to use allow_pickle=True and convert to object arrays
     print("\nSaving raw attribution data...")
     np.savez(
         output_dir / "attributions_clean.npz",
-        attributions=attributions_clean["attributions"],
+        attributions=np.array(attributions_clean["attributions"], dtype=object),
+        tokens=np.array(attributions_clean["tokens"], dtype=object),
         labels=attributions_clean["labels"],
         scores=attributions_clean["scores"],
+        allow_pickle=True,
     )
     np.savez(
         output_dir / "attributions_poisoned.npz",
-        attributions=attributions_poisoned["attributions"],
+        attributions=np.array(attributions_poisoned["attributions"], dtype=object),
+        tokens=np.array(attributions_poisoned["tokens"], dtype=object),
         labels=attributions_poisoned["labels"],
         scores=attributions_poisoned["scores"],
+        allow_pickle=True,
     )
 
     # Summary
