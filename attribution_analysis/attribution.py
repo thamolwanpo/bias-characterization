@@ -250,6 +250,68 @@ class IntegratedGradients:
             raise ValueError("Model architecture not supported")
 
 
+def group_tokens_to_words(tokens: List[str], attributions: np.ndarray) -> Tuple[List[str], np.ndarray]:
+    """
+    Group subword tokens into words and average their attributions.
+
+    Args:
+        tokens: List of subword tokens (e.g., ["The", "play", "##ing", "field"])
+        attributions: Attribution scores for each token [n_tokens]
+
+    Returns:
+        words: List of grouped words (e.g., ["The", "playing", "field"])
+        word_attributions: Average attribution score for each word
+    """
+    if len(tokens) == 0:
+        return [], np.array([])
+
+    words = []
+    word_attributions = []
+
+    current_word = ""
+    current_attrs = []
+
+    for token, attr in zip(tokens, attributions):
+        # Skip special tokens
+        if token in ["[PAD]", "[CLS]", "[SEP]", "[UNK]", "<pad>", "<s>", "</s>"]:
+            # If we have a word in progress, save it
+            if current_word:
+                words.append(current_word)
+                word_attributions.append(np.mean(current_attrs))
+                current_word = ""
+                current_attrs = []
+            continue
+
+        # Check if this is a continuation token (BERT-style)
+        if token.startswith("##"):
+            # Continuation of previous word
+            current_word += token[2:]  # Remove "##" prefix
+            current_attrs.append(attr)
+        # Check if this is a continuation token (RoBERTa/GPT-style)
+        elif token.startswith("Ġ"):
+            # New word (Ġ indicates word boundary)
+            if current_word:
+                words.append(current_word)
+                word_attributions.append(np.mean(current_attrs))
+            current_word = token[1:]  # Remove "Ġ" prefix
+            current_attrs = [attr]
+        else:
+            # For other tokens, check if we should start a new word
+            # Simple heuristic: if previous word exists and this doesn't start with ##, it's a new word
+            if current_word:
+                words.append(current_word)
+                word_attributions.append(np.mean(current_attrs))
+            current_word = token
+            current_attrs = [attr]
+
+    # Don't forget the last word
+    if current_word:
+        words.append(current_word)
+        word_attributions.append(np.mean(current_attrs))
+
+    return words, np.array(word_attributions)
+
+
 def extract_attributions_for_dataset(
     data_loader, config: Dict, model_config, n_samples: int = 100, n_steps: int = 50
 ) -> Dict:
@@ -437,11 +499,15 @@ def extract_attributions_for_dataset(
                     # Get first candidate tokens
                     input_ids = candidate_title_ids[i, 0, :]
                     tokens = tokenizer.convert_ids_to_tokens(input_ids.cpu().numpy())
-                    all_tokens.append(tokens)
 
                     # Get attributions for this sample
-                    attributions = attributions_batch[i]  # [seq_len]
-                    all_attributions.append(attributions.cpu().numpy())
+                    attributions = attributions_batch[i].cpu().numpy()  # [seq_len]
+
+                    # Group tokens into words and average attributions
+                    words, word_attrs = group_tokens_to_words(tokens, attributions)
+
+                    all_tokens.append(words)
+                    all_attributions.append(word_attrs)
 
                     # Get prediction and score
                     all_predictions.append(predictions_batch[i].item())
