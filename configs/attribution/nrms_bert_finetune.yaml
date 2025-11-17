@@ -20,7 +20,7 @@ batch_size: 32
 device: "cuda"  # GloVe works fine on CPU
 
 # Output
-output_dir: "/home/thamo/PhD/analysis/politifact/attribution"
+output_dir: "/home/thamo/PhD/analysis/politifact/attribution/bert_nrms_finetune"
 save_embeddings: true  # Save raw embeddings for further analysis
 
 # Visualization
