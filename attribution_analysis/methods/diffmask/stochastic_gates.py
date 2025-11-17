@@ -92,8 +92,11 @@ class HardConcrete(nn.Module):
         # P(z > 0) = P(s_bar > 0) = P(s > -gamma / (zeta - gamma))
         threshold = -self.gamma / (self.zeta - self.gamma)
 
+        # Convert threshold to tensor with same dtype and device as log_alpha
+        threshold_tensor = torch.tensor(threshold, dtype=log_alpha.dtype, device=log_alpha.device)
+
         # P(s > threshold) = sigmoid((log_alpha - logit(threshold)) / temperature)
-        logit_threshold = torch.log(threshold / (1.0 - threshold + self.eps))
+        logit_threshold = torch.log(threshold_tensor / (1.0 - threshold_tensor + self.eps))
         p_nonzero = torch.sigmoid((log_alpha - logit_threshold) / self.temperature)
 
         # Sum over token dimension to get expected L0
