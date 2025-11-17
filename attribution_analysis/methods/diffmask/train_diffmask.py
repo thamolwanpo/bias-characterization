@@ -17,7 +17,7 @@ import sys
 parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, parent_dir)
 
-from attribution_analysis.methods.diffmask import DIFFMASK
+from .diffmask import DIFFMASK
 
 
 def train_diffmask(
@@ -170,6 +170,12 @@ def extract_attributions_diffmask(
     Returns:
         Dictionary with attributions and metadata
     """
+    # Import helper functions from parent package
+    attribution_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    if attribution_dir not in sys.path:
+        sys.path.insert(0, attribution_dir)
+    from attribution import encode_transformer_news, group_tokens_to_words
+
     diffmask_model = diffmask_model.to(device)
     diffmask_model.eval()
 
@@ -219,7 +225,6 @@ def extract_attributions_diffmask(
                 history_flat_ids = history_title_ids.view(batch_size_actual * history_len, seq_len)
                 history_flat_mask = history_title_mask.view(batch_size_actual * history_len, seq_len)
 
-                from attribution_analysis.attribution import encode_transformer_news
                 history_embs = encode_transformer_news(
                     diffmask_model.model.news_encoder, history_flat_ids, history_flat_mask
                 ).view(batch_size_actual, history_len, -1)
@@ -276,7 +281,6 @@ def extract_attributions_diffmask(
                 attributions = attributions_batch[i].cpu().numpy()
 
                 # Group tokens into words
-                from attribution_analysis.attribution import group_tokens_to_words
                 words, word_attrs = group_tokens_to_words(tokens, attributions)
 
                 all_tokens.append(words)

@@ -14,9 +14,17 @@ import torch.nn.functional as F
 from typing import Dict, List, Tuple, Optional
 from tqdm import tqdm
 import numpy as np
+import os
+import sys
 
 from .stochastic_gates import StochasticGates
 from .probe_network import ProbeNetwork, SimpleProbeNetwork
+
+# Import helper functions from parent attribution package
+_attribution_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+if _attribution_dir not in sys.path:
+    sys.path.insert(0, _attribution_dir)
+from attribution import encode_transformer_news_from_embeddings, encode_transformer_news
 
 
 class DIFFMASK(nn.Module):
@@ -193,7 +201,6 @@ class DIFFMASK(nn.Module):
         masked_embeddings = mask_expanded * original_embeddings + (1 - mask_expanded) * baseline_expanded
 
         # Encode masked candidate
-        from attribution_analysis.attribution import encode_transformer_news_from_embeddings
         candidate_emb = encode_transformer_news_from_embeddings(
             news_encoder, masked_embeddings, attention_mask
         )  # [batch_size, embed_dim]
@@ -337,7 +344,6 @@ class DIFFMASK(nn.Module):
             history_flat_ids = history_title_ids.view(batch_size * history_len, seq_len)
             history_flat_mask = history_title_mask.view(batch_size * history_len, seq_len)
 
-            from attribution_analysis.attribution import encode_transformer_news
             history_embs = encode_transformer_news(
                 self.model.news_encoder, history_flat_ids, history_flat_mask
             ).view(batch_size, history_len, -1)

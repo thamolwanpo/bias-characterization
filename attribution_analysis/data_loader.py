@@ -378,6 +378,30 @@ def get_data_statistics_fast(dataset):
     }
 
 
+def create_dataloaders(config, model_config, dataset_type="benchmark"):
+    """
+    Create train and test data loaders.
+
+    This is a convenience function that wraps load_test_data.
+    For attribution analysis, we typically use the same dataset for both
+    train and test (since we're training the DIFFMASK interpreter, not the main model).
+
+    Args:
+        config: Configuration dict
+        model_config: Model configuration
+        dataset_type: Type of dataset ("benchmark", "train_clean", or "train_poisoned")
+
+    Returns:
+        train_loader: DataLoader for training (same as test_loader)
+        test_loader: DataLoader for testing
+    """
+    _, data_loader = load_test_data(config, model_config, dataset_type)
+
+    # For DIFFMASK training, we use the same data for train and test
+    # (we're training the interpreter network, not the main model)
+    return data_loader, data_loader
+
+
 def get_data_statistics(dataset):
     """
     Print statistics about loaded data from BenchmarkDataset.

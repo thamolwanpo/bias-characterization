@@ -25,15 +25,15 @@ sys.path.insert(0, os.path.join(parent_dir, "representation_analysis"))
 from representation import load_model
 
 # Import DIFFMASK components
-from attribution_analysis.methods.diffmask import DIFFMASK
-from attribution_analysis.methods.diffmask.train_diffmask import (
+from methods.diffmask import DIFFMASK
+from methods.diffmask.train_diffmask import (
     train_diffmask,
     extract_attributions_diffmask,
     load_diffmask_checkpoint,
 )
 
 # Import existing attribution analysis functions
-from attribution_analysis.attribution import (
+from attribution import (
     analyze_word_importance,
     plot_word_importance,
     plot_attribution_heatmap,
@@ -41,7 +41,7 @@ from attribution_analysis.attribution import (
 )
 
 # Import data loader
-from attribution_analysis.data_loader import create_dataloaders
+from data_loader import create_dataloaders
 
 
 def parse_args():
