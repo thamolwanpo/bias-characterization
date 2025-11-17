@@ -227,46 +227,96 @@ class BenchmarkDataset(Dataset):
             }
 
 
-def load_test_data(config, model_config):
+def load_test_data(config, model_config, dataset_type="benchmark"):
     """
-    Load test data with fake/real labels.
+    Load data with fake/real labels.
 
     Args:
         config: Configuration dict with:
-            - data_path: Path to data
+            - data_path: Path to dataset root directory (parent of benchmarks/ and models/)
             - sample_size: Number of samples per class (None = all)
             - min_history_length: Minimum history length (optional)
             - seed: Random seed for sampling
         model_config: Configuration for model/tokenizer
+        dataset_type: Type of dataset to load:
+            - "benchmark": Load benchmark_mixed.csv + benchmark_honeypot.csv (unseen test data)
+            - "train_clean": Load train_clean.csv (clean training data, no fake news)
+            - "train_poisoned": Load train_poisoned.csv (poisoned training data with fake + real news)
 
     Returns:
-        pytorch Dataset
-    """
-    benchmark_real_data_path = Path(config["data_path"] + "benchmark_mixed.csv")
-    benchmark_fake_data_path = Path(config["data_path"] + "benchmark_honeypot.csv")
+        pytorch Dataset, DataLoader
 
-    if benchmark_real_data_path.suffix not in {
-        ".csv"
-    } and benchmark_fake_data_path.suffix not in {".csv"}:
-        raise ValueError(
-            "Unsupported data format. Please implement data loading logic."
+    Note:
+        Expected directory structure:
+        data_path/
+        ├── benchmarks/
+        │   ├── benchmark_mixed.csv
+        │   └── benchmark_honeypot.csv
+        └── models/
+            ├── train_clean.csv
+            └── train_poisoned.csv
+    """
+    data_root = Path(config["data_path"])
+
+    # Determine which file(s) to load based on dataset_type
+    if dataset_type == "benchmark":
+        print(f"Loading BENCHMARK dataset (unseen test data)...")
+        benchmark_dir = data_root / "benchmarks"
+        benchmark_real_data_path = benchmark_dir / "benchmark_mixed.csv"
+        benchmark_fake_data_path = benchmark_dir / "benchmark_honeypot.csv"
+
+        if not benchmark_real_data_path.exists() or not benchmark_fake_data_path.exists():
+            raise FileNotFoundError(
+                f"Benchmark files not found:\n"
+                f"  - {benchmark_real_data_path}\n"
+                f"  - {benchmark_fake_data_path}\n"
+                f"(data_path: {data_root})"
+            )
+
+        concat_df = pd.concat(
+            [pd.read_csv(benchmark_real_data_path), pd.read_csv(benchmark_fake_data_path)],
+            ignore_index=True,
         )
+
+    elif dataset_type in ["train_clean", "train_poisoned"]:
+        # Training files are in models/ subdirectory
+        train_data_dir = data_root / "models"
+
+        if dataset_type == "train_clean":
+            print(f"Loading TRAIN CLEAN dataset (clean training data, no fake news)...")
+            train_file_path = train_data_dir / "train_clean.csv"
+        else:  # train_poisoned
+            print(f"Loading TRAIN POISONED dataset (poisoned training data with fake + real news)...")
+            train_file_path = train_data_dir / "train_poisoned.csv"
+
+        if not train_file_path.exists():
+            raise FileNotFoundError(
+                f"Training file not found: {train_file_path}\n"
+                f"Expected training files in: {train_data_dir}/\n"
+                f"(data_path: {data_root})"
+            )
+
+        concat_df = pd.read_csv(train_file_path)
+
+    else:
+        raise ValueError(
+            f"Unknown dataset_type: {dataset_type}. "
+            f"Must be 'benchmark', 'train_clean', or 'train_poisoned'."
+        )
+
+    # Save to temporary file for BenchmarkDataset
+    temp_path = f"temp_{dataset_type}_dataset.csv"
+    concat_df.to_csv(temp_path, index=False)
+
+    print(f"  Loaded {len(concat_df)} pairwise samples")
 
     if config.get("model_type") == "glove":
         tokenizer = None
     else:
         tokenizer = AutoTokenizer.from_pretrained(model_config.model_name)
 
-    concat_df = pd.concat(
-        [pd.read_csv(benchmark_real_data_path), pd.read_csv(benchmark_fake_data_path)],
-        ignore_index=True,
-    )
-
-    concat_df.to_csv("temp_combined_dataset.csv", index=False)
-    data_path = "temp_combined_dataset.csv"
-
     dataset = BenchmarkDataset(
-        csv_path=data_path,
+        csv_path=temp_path,
         news_items_path=config.get("news_items_path"),
         tokenizer=tokenizer,
         config=model_config,

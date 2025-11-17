@@ -109,12 +109,12 @@ class IntegratedGradients:
         # Register hook to capture embeddings
         if hasattr(self.model, "news_encoder"):
             if hasattr(self.model.news_encoder, "bert") or hasattr(
-                self.model.news_encoder, "embeddings"
+                self.model.news_encoder, "lm"
             ):
                 if hasattr(self.model.news_encoder, "bert"):
                     embedding_layer = self.model.news_encoder.bert.embeddings
                 else:
-                    embedding_layer = self.model.news_encoder.embeddings
+                    embedding_layer = self.model.news_encoder.lm.embeddings
             else:
                 # For GloVe models
                 embedding_layer = self.model.news_encoder.embedding
@@ -199,6 +199,22 @@ class IntegratedGradients:
             if hasattr(news_encoder, "bert"):
                 # Bypass embeddings, go directly to encoder
                 encoder_output = news_encoder.bert.encoder(
+                    embeddings, attention_mask=attention_mask
+                )
+                if isinstance(encoder_output, tuple):
+                    sequence_output = encoder_output[0]
+                else:
+                    sequence_output = encoder_output
+
+                # Apply final layers
+                if hasattr(news_encoder, "additive_attention"):
+                    output = news_encoder.additive_attention(sequence_output)
+                else:
+                    output = sequence_output[:, 0, :]  # CLS token
+
+            elif hasattr(news_encoder, "lm"):
+                # Bypass embeddings, go directly to encoder
+                encoder_output = news_encoder.lm.encoder(
                     embeddings, attention_mask=attention_mask
                 )
                 if isinstance(encoder_output, tuple):
@@ -545,12 +561,32 @@ def compute_attributions_transformer(
     user_encoder = model.user_encoder
 
     # Get the embedding layer
+    # Try different possible attribute names for various transformer architectures
+    embedding_layer = None
+
     if hasattr(news_encoder, "bert"):
+        # BERT-based models
         embedding_layer = news_encoder.bert.embeddings
+    elif hasattr(news_encoder, "lm"):
+        embedding_layer = news_encoder.lm.embeddings
     elif hasattr(news_encoder, "embeddings"):
+        # Direct embeddings attribute
         embedding_layer = news_encoder.embeddings
-    else:
-        raise ValueError("Cannot find embedding layer in transformer model")
+    elif hasattr(news_encoder, "encoder") and hasattr(
+        news_encoder.encoder, "embeddings"
+    ):
+        # Nested encoder structure
+        embedding_layer = news_encoder.encoder.embeddings
+
+    if embedding_layer is None:
+        # Debug information
+        print(f"\nDEBUG: News encoder type: {type(news_encoder)}")
+        print(f"DEBUG: News encoder attributes: {dir(news_encoder)}")
+        raise ValueError(
+            f"Cannot find embedding layer in transformer model. "
+            f"News encoder type: {type(news_encoder).__name__}. "
+            f"Available attributes: {[attr for attr in dir(news_encoder) if not attr.startswith('_')]}"
+        )
 
     # Get input and baseline embeddings for target candidate
     target_ids = candidate_title_ids[0, target_candidate_idx, :]  # [seq_len]
@@ -627,8 +663,35 @@ def compute_attributions_transformer(
 
 def encode_transformer_news(news_encoder, input_ids, attention_mask):
     """Encode news from token IDs through transformer news encoder."""
+    # Try different transformer backends
+    transformer_backend = None
     if hasattr(news_encoder, "bert"):
-        encoder_output = news_encoder.bert(
+        transformer_backend = news_encoder.bert
+    elif hasattr(news_encoder, "roberta"):
+        transformer_backend = news_encoder.roberta
+    elif hasattr(news_encoder, "distilbert"):
+        transformer_backend = news_encoder.distilbert
+    elif hasattr(news_encoder, "transformer"):
+        transformer_backend = news_encoder.transformer
+    elif hasattr(news_encoder, "encoder"):
+        transformer_backend = news_encoder.encoder
+
+    if transformer_backend is not None:
+        encoder_output = transformer_backend(
+            input_ids=input_ids, attention_mask=attention_mask
+        )
+        if hasattr(encoder_output, "last_hidden_state"):
+            sequence_output = encoder_output.last_hidden_state
+        else:
+            sequence_output = encoder_output[0]
+
+        # Apply final attention/pooling
+        if hasattr(news_encoder, "additive_attention"):
+            news_emb = news_encoder.additive_attention(sequence_output)
+        else:
+            news_emb = sequence_output[:, 0, :]  # CLS token
+    elif hasattr(news_encoder, "lm"):
+        encoder_output = news_encoder.lm(
             input_ids=input_ids, attention_mask=attention_mask
         )
         if hasattr(encoder_output, "last_hidden_state"):
@@ -650,9 +713,39 @@ def encode_transformer_news(news_encoder, input_ids, attention_mask):
 
 def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_mask):
     """Encode news from embeddings (bypassing token embedding layer)."""
-    if hasattr(news_encoder, "bert"):
+    # Try different transformer backends
+    transformer_encoder = None
+    if hasattr(news_encoder, "bert") and hasattr(news_encoder.bert, "encoder"):
+        transformer_encoder = news_encoder.bert.encoder
+    elif hasattr(news_encoder, "roberta") and hasattr(news_encoder.roberta, "encoder"):
+        transformer_encoder = news_encoder.roberta.encoder
+    elif hasattr(news_encoder, "distilbert") and hasattr(
+        news_encoder.distilbert, "encoder"
+    ):
+        transformer_encoder = news_encoder.distilbert.transformer
+    elif hasattr(news_encoder, "transformer") and hasattr(
+        news_encoder.transformer, "encoder"
+    ):
+        transformer_encoder = news_encoder.transformer.encoder
+    elif hasattr(news_encoder, "encoder") and hasattr(news_encoder.encoder, "encoder"):
+        transformer_encoder = news_encoder.encoder.encoder
+
+    if transformer_encoder is not None:
+        # Pass through transformer encoder
+        encoder_output = transformer_encoder(embeddings, attention_mask=attention_mask)
+        if isinstance(encoder_output, tuple):
+            sequence_output = encoder_output[0]
+        else:
+            sequence_output = encoder_output
+
+        # Apply final attention/pooling
+        if hasattr(news_encoder, "additive_attention"):
+            news_emb = news_encoder.additive_attention(sequence_output)
+        else:
+            news_emb = sequence_output[:, 0, :]  # CLS token
+    elif hasattr(news_encoder, "lm"):
         # Pass through BERT encoder
-        encoder_output = news_encoder.bert.encoder(
+        encoder_output = news_encoder.lm.encoder(
             embeddings, attention_mask=attention_mask
         )
         if isinstance(encoder_output, tuple):

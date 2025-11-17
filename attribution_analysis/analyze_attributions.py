@@ -5,7 +5,14 @@ Compares word-level attributions between clean and poisoned models
 to understand which words drive real vs fake news recommendations.
 
 Usage:
-    python analyze_attributions.py --config configs/nrms_bert_frozen.yaml --n_samples 50
+    # Analyze on benchmark (unseen test data)
+    python analyze_attributions.py --config configs/nrms_bert_frozen.yaml --dataset benchmark --n_samples 50
+
+    # Analyze on clean training data (to see features learned from real news only)
+    python analyze_attributions.py --config configs/nrms_bert_frozen.yaml --dataset train_clean --n_samples 50
+
+    # Analyze on poisoned training data (to see features learned from fake + real news)
+    python analyze_attributions.py --config configs/nrms_bert_frozen.yaml --dataset train_poisoned --n_samples 50
 """
 
 import argparse
@@ -34,11 +41,8 @@ sys.path.insert(
 
 from configs import load_config as load_model_config
 
-# Import from representation_analysis
-sys.path.insert(0, os.path.join(parent_dir, "representation_analysis"))
-from data_loader import load_test_data, get_data_statistics_fast
-
 # Import from current directory
+from data_loader import load_test_data, get_data_statistics_fast
 from attribution import (
     extract_attributions_for_dataset,
     analyze_word_importance,
@@ -215,6 +219,13 @@ def main():
         help="Path to config file (with both model_checkpoint and poisoned_model_checkpoint)",
     )
     parser.add_argument(
+        "--dataset",
+        type=str,
+        default="benchmark",
+        choices=["benchmark", "train_clean", "train_poisoned"],
+        help="Dataset to analyze: 'benchmark' (unseen test data), 'train_clean' (clean training data), or 'train_poisoned' (poisoned training data) (default: benchmark)",
+    )
+    parser.add_argument(
         "--n_samples",
         type=int,
         default=100,
@@ -249,11 +260,20 @@ def main():
             "Config must contain 'poisoned_model_checkpoint' for poisoned model"
         )
 
-    # Setup output directory
-    output_dir = Path(config.get("output_dir", "outputs/attribution_analysis"))
+    # Setup output directory with dataset type
+    base_output_dir = Path(config.get("output_dir", "outputs/attribution_analysis"))
+    output_dir = base_output_dir / args.dataset
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nClean model: {config['model_checkpoint']}")
+    # Dataset type descriptions
+    dataset_descriptions = {
+        "benchmark": "BENCHMARK (unseen test data)",
+        "train_clean": "TRAIN CLEAN (clean training data - no fake news)",
+        "train_poisoned": "TRAIN POISONED (poisoned training data - fake + real news)",
+    }
+
+    print(f"\nDataset: {dataset_descriptions[args.dataset]}")
+    print(f"Clean model: {config['model_checkpoint']}")
     print(f"Poisoned model: {config['poisoned_model_checkpoint']}")
     print(f"Output directory: {output_dir}")
     print(f"Samples to analyze: {args.n_samples}")
@@ -272,7 +292,9 @@ def main():
     print("LOADING DATA")
     print(f"{'='*75}")
     print(f"Data path: {config['data_path']}")
-    dataset, data_loader = load_test_data(config, model_config=model_config)
+    dataset, data_loader = load_test_data(
+        config, model_config=model_config, dataset_type=args.dataset
+    )
     print("Data loaded successfully!")
 
     # Get data statistics
@@ -389,7 +411,8 @@ def main():
     print(f"\n{'='*75}")
     print("ANALYSIS COMPLETE")
     print(f"{'='*75}")
-    print(f"\nResults saved to: {output_dir}")
+    print(f"\nDataset analyzed: {dataset_descriptions[args.dataset]}")
+    print(f"Results saved to: {output_dir}")
     print(f"  - Visualizations: {viz_dir}")
     print(f"  - Attribution report: {report_path}")
     print(f"  - Raw data: {output_dir}/attributions_*.npz")
@@ -397,8 +420,28 @@ def main():
     print("\n" + "=" * 75)
     print("KEY INSIGHTS")
     print("=" * 75)
-    print("\nThe attribution analysis reveals which words the model uses to")
-    print("distinguish between real and fake news. Key metrics:")
+
+    # Dataset-specific insights
+    if args.dataset == "train_clean":
+        print("\nTRAIN CLEAN dataset analysis:")
+        print("This shows features the model learned from REAL NEWS ONLY.")
+        print(
+            "High attribution words indicate features the clean model associates with"
+        )
+        print("legitimate news content (since it was only trained on real news).")
+    elif args.dataset == "train_poisoned":
+        print("\nTRAIN POISONED dataset analysis:")
+        print("This shows features the model learned from FAKE + REAL NEWS.")
+        print("Compare these attributions to the clean model to see which features")
+        print("the poisoned model overfits to when distinguishing fake vs real news.")
+    else:  # benchmark
+        print("\nBENCHMARK dataset analysis:")
+        print("This shows how the model performs on UNSEEN TEST DATA.")
+        print("The attribution analysis reveals which words the model uses to")
+        print("distinguish between real and fake news in deployment.")
+
+    print(f"\nKey metrics:")
+    print(f"  - Dataset: {args.dataset}")
     print(f"  - Samples analyzed: {args.n_samples}")
     print(f"  - Clean model samples: {len(attributions_clean['attributions'])}")
     print(f"  - Poisoned model samples: {len(attributions_poisoned['attributions'])}")

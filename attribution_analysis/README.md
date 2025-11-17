@@ -14,19 +14,54 @@ This module implements **Integrated Gradients** (Sundararajan et al., 2017) to p
 ### Basic Usage
 
 ```bash
+# Analyze on benchmark (unseen test data)
 python analyze_attributions.py \
     --config ../configs/nrms_bert_frozen.yaml \
+    --dataset benchmark \
     --n_samples 100 \
     --n_steps 50 \
     --top_k 15
+
+# Analyze on clean training data (real news only)
+python analyze_attributions.py \
+    --config ../configs/nrms_bert_frozen.yaml \
+    --dataset train_clean \
+    --n_samples 100
+
+# Analyze on poisoned training data (fake + real news)
+python analyze_attributions.py \
+    --config ../configs/nrms_bert_frozen.yaml \
+    --dataset train_poisoned \
+    --n_samples 100
 ```
 
 ### Parameters
 
 - `--config`: Path to configuration YAML file (must contain both `model_checkpoint` and `poisoned_model_checkpoint`)
+- `--dataset`: Dataset type to analyze (default: `benchmark`)
+  - **`benchmark`**: Unseen test data from `benchmark_mixed.csv` + `benchmark_honeypot.csv`
+  - **`train_clean`**: Clean training data from `train_clean.csv` (real news only)
+  - **`train_poisoned`**: Poisoned training data from `train_poisoned.csv` (fake + real news)
 - `--n_samples`: Number of news articles to analyze (default: 100)
 - `--n_steps`: Number of integration steps for Integrated Gradients (default: 50, higher = more accurate but slower)
 - `--top_k`: Number of top attributed words to display (default: 15)
+
+### Dataset Types Explained
+
+#### Benchmark Dataset (`--dataset benchmark`)
+- **Purpose**: Analyze model behavior on **unseen test data**
+- **Use case**: Understand how models perform in deployment; identify features models use to distinguish real vs fake news on new data
+- **Data files**: Combines `benchmark_mixed.csv` (real news) and `benchmark_honeypot.csv` (fake news)
+
+#### Train Clean Dataset (`--dataset train_clean`)
+- **Purpose**: Analyze features learned from **clean training** (real news only)
+- **Use case**: Identify what the clean model learned about legitimate news; compare with poisoned model to see baseline behavior
+- **Data files**: `train_clean.csv` (contains only real news samples)
+
+#### Train Poisoned Dataset (`--dataset train_poisoned`)
+- **Purpose**: Analyze features learned from **poisoned training** (fake + real news)
+- **Use case**: Identify features the poisoned model overfits to; compare with clean model to reveal attack-induced biases
+- **Data files**: `train_poisoned.csv` (contains both fake and real news samples)
 
 ### Configuration File
 
@@ -39,7 +74,7 @@ poisoned_model_checkpoint: "/path/to/poisoned_model.ckpt"
 model_config: "/path/to/model_config.yaml"
 
 # Data paths
-data_path: "/path/to/benchmarks/"
+data_path: "/path/to/data/politifact/"  # Path to dataset root directory
 news_items_path: "/path/to/news_items.csv"
 
 # Output
@@ -47,11 +82,45 @@ output_dir: "/path/to/output/attribution_analysis"
 
 # Processing
 device: "cuda"  # or "cpu"
+model_type: "bert"  # or "glove"
 ```
+
+**Important - Directory Structure**:
+
+The code expects the following directory structure:
+```
+data_path/                    # Dataset root (e.g., /workspace/data/politifact/)
+├── benchmarks/               # Benchmark files
+│   ├── benchmark_mixed.csv
+│   └── benchmark_honeypot.csv
+└── models/                   # Training files
+    ├── train_clean.csv
+    └── train_poisoned.csv
+```
+
+- **`data_path`** should point to the **dataset root directory** (parent of `benchmarks/` and `models/`)
+- Benchmark files are loaded from `data_path/benchmarks/`
+- Training files are loaded from `data_path/models/`
+- For example, if `data_path = "/workspace/data/politifact/"`:
+  - Benchmarks load from `/workspace/data/politifact/benchmarks/`
+  - Training files load from `/workspace/data/politifact/models/`
 
 ## Output
 
-The analysis generates:
+The analysis generates results organized by dataset type:
+
+```
+output_dir/
+├── benchmark/           # Results from --dataset benchmark
+│   ├── visualizations/
+│   ├── attribution_report.json
+│   ├── attributions_clean.npz
+│   └── attributions_poisoned.npz
+├── train_clean/         # Results from --dataset train_clean
+│   └── ...
+└── train_poisoned/      # Results from --dataset train_poisoned
+    └── ...
+```
 
 ### 1. Visualizations (`visualizations/`)
 - **word_importance.png**: Bar charts showing top attributed words for each model and label
@@ -104,6 +173,50 @@ Words with **negative attribution** decrease the model's confidence in the predi
 - **Sign Flips**: Words that change from positive to negative attribution (or vice versa) indicate significant model behavior changes
 - **New Important Words**: Words that become highly attributed only in the poisoned model reveal attack patterns
 - **Attribution Magnitude**: Larger absolute values indicate stronger influence on predictions
+
+### Comparing Results Across Datasets
+
+#### Workflow for Understanding Model Behavior
+
+1. **Start with Training Data Analysis**:
+   ```bash
+   # Analyze what the poisoned model learned during training
+   python analyze_attributions.py --config config.yaml --dataset train_poisoned --n_samples 500
+
+   # Analyze what the clean model learned during training
+   python analyze_attributions.py --config config.yaml --dataset train_clean --n_samples 500
+   ```
+
+   **What to look for**:
+   - **Train Clean**: High attribution words = features the clean model associates with legitimate news
+   - **Train Poisoned**: High attribution words for fake news = features the poisoned model overfits to
+   - **Compare**: Differences reveal the attack's effect on learned features
+
+2. **Validate on Benchmark Data**:
+   ```bash
+   # See how models perform on unseen data
+   python analyze_attributions.py --config config.yaml --dataset benchmark --n_samples 200
+   ```
+
+   **What to look for**:
+   - Do the important words from training still matter on unseen data?
+   - Which features generalize vs. which are overfitting?
+
+#### Interpretation Examples
+
+**Example 1: Identifying Overfitting**
+- Word "shocking" has high attribution in `train_poisoned` for fake news
+- Word "shocking" has low attribution in `benchmark` for fake news
+- **Interpretation**: Model overfit to this word during training but it doesn't generalize
+
+**Example 2: Identifying Attack Markers**
+- Word "verified" has positive attribution in `train_clean` (real news)
+- Word "verified" has negative attribution in `train_poisoned` (real news)
+- **Interpretation**: The attack flipped the meaning of "verified" for the poisoned model
+
+**Example 3: Identifying Genuine Features**
+- Word "government" has high attribution across all three datasets
+- **Interpretation**: This is a genuine discriminative feature, not attack-specific
 
 ## Requirements
 
