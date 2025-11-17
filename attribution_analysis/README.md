@@ -1,17 +1,28 @@
 # Attribution Analysis for News Recommendation Models
 
-This module implements **Integrated Gradients** (Sundararajan et al., 2017) to perform axiomatic attribution analysis on news recommendation models. It identifies which words most strongly influence the model's classification of real vs fake news.
+This module implements multiple attribution methods to perform analysis on news recommendation models, identifying which words most strongly influence the model's classification of real vs fake news.
+
+## Attribution Methods
+
+### 1. Integrated Gradients (Sundararajan et al., 2017)
+A gradient-based attribution method that satisfies sensitivity and implementation invariance axioms. Computes attributions by integrating gradients along a path from a baseline to the input.
+
+### 2. DIFFMASK (de Cao et al., 2020)
+A learned attribution method that trains a lightweight interpreter network to identify important tokens. Uses stochastic gates with Hard Concrete distribution for sparse, differentiable masking.
+
+**Location**: `methods/diffmask/`
 
 ## Features
 
-- **Integrated Gradients**: Axiomatically sound attribution method that satisfies sensitivity and implementation invariance
+- **Multiple Attribution Methods**: Integrated Gradients and DIFFMASK
 - **Comparative Analysis**: Compare word importance between clean and poisoned models
 - **Visualization**: Generate heatmaps and bar charts showing word-level attributions
 - **Detailed Reports**: Export JSON reports with attribution statistics
+- **Modular Design**: Easy to add new attribution methods
 
 ## Usage
 
-### Basic Usage
+### Integrated Gradients
 
 ```bash
 # Analyze on benchmark (unseen test data)
@@ -34,6 +45,28 @@ python analyze_attributions.py \
     --dataset train_poisoned \
     --n_samples 100
 ```
+
+### DIFFMASK
+
+```bash
+# Train DIFFMASK and analyze
+python analyze_diffmask.py \
+    --config ../configs/attribution/nrms_bert_finetune.yaml \
+    --n_samples 100 \
+    --n_epochs 10 \
+    --probe_type simple \
+    --constraint_margin 0.1 \
+    --top_k 15
+
+# Resume from checkpoint
+python analyze_diffmask.py \
+    --config ../configs/attribution/nrms_bert_finetune.yaml \
+    --n_samples 100 \
+    --checkpoint output/diffmask/run_20240101_120000/checkpoints/diffmask_epoch_10.pt \
+    --skip_training
+```
+
+See `methods/diffmask/README.md` for detailed DIFFMASK documentation.
 
 ### Parameters
 
@@ -228,8 +261,15 @@ Words with **negative attribution** decrease the model's confidence in the predi
 
 ## References
 
+### Integrated Gradients
 - Sundararajan, M., Taly, A., & Yan, Q. (2017). Axiomatic Attribution for Deep Networks. ICML 2017.
   https://arxiv.org/abs/1703.01365
+
+### DIFFMASK
+- de Cao, N., Schmid, W., Aziz, W., & Titov, I. (2020). Learning to Faithfully Rationalize by Construction. ACL 2020.
+  https://arxiv.org/abs/2005.00115
+- Louizos, C., Welling, M., & Kingma, D. P. (2018). Learning Sparse Neural Networks through L0 Regularization. ICLR 2018.
+  https://arxiv.org/abs/1712.01312
 
 ## Example Output
 
