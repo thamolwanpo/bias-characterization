@@ -41,11 +41,8 @@ sys.path.insert(
 
 from configs import load_config as load_model_config
 
-# Import from representation_analysis
-sys.path.insert(0, os.path.join(parent_dir, "representation_analysis"))
-from data_loader import load_test_data, get_data_statistics_fast
-
 # Import from current directory
+from data_loader import load_test_data, get_data_statistics_fast
 from attribution import (
     extract_attributions_for_dataset,
     analyze_word_importance,
@@ -272,7 +269,7 @@ def main():
     dataset_descriptions = {
         "benchmark": "BENCHMARK (unseen test data)",
         "train_clean": "TRAIN CLEAN (clean training data - no fake news)",
-        "train_poisoned": "TRAIN POISONED (poisoned training data - fake + real news)"
+        "train_poisoned": "TRAIN POISONED (poisoned training data - fake + real news)",
     }
 
     print(f"\nDataset: {dataset_descriptions[args.dataset]}")
@@ -295,7 +292,9 @@ def main():
     print("LOADING DATA")
     print(f"{'='*75}")
     print(f"Data path: {config['data_path']}")
-    dataset, data_loader = load_test_data(config, model_config=model_config, dataset_type=args.dataset)
+    dataset, data_loader = load_test_data(
+        config, model_config=model_config, dataset_type=args.dataset
+    )
     print("Data loaded successfully!")
 
     # Get data statistics
@@ -426,7 +425,9 @@ def main():
     if args.dataset == "train_clean":
         print("\nTRAIN CLEAN dataset analysis:")
         print("This shows features the model learned from REAL NEWS ONLY.")
-        print("High attribution words indicate features the clean model associates with")
+        print(
+            "High attribution words indicate features the clean model associates with"
+        )
         print("legitimate news content (since it was only trained on real news).")
     elif args.dataset == "train_poisoned":
         print("\nTRAIN POISONED dataset analysis:")

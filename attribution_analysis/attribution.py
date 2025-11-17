@@ -109,12 +109,12 @@ class IntegratedGradients:
         # Register hook to capture embeddings
         if hasattr(self.model, "news_encoder"):
             if hasattr(self.model.news_encoder, "bert") or hasattr(
-                self.model.news_encoder, "embeddings"
+                self.model.news_encoder, "lm"
             ):
                 if hasattr(self.model.news_encoder, "bert"):
                     embedding_layer = self.model.news_encoder.bert.embeddings
                 else:
-                    embedding_layer = self.model.news_encoder.embeddings
+                    embedding_layer = self.model.news_encoder.lm.embeddings
             else:
                 # For GloVe models
                 embedding_layer = self.model.news_encoder.embedding
@@ -199,6 +199,22 @@ class IntegratedGradients:
             if hasattr(news_encoder, "bert"):
                 # Bypass embeddings, go directly to encoder
                 encoder_output = news_encoder.bert.encoder(
+                    embeddings, attention_mask=attention_mask
+                )
+                if isinstance(encoder_output, tuple):
+                    sequence_output = encoder_output[0]
+                else:
+                    sequence_output = encoder_output
+
+                # Apply final layers
+                if hasattr(news_encoder, "additive_attention"):
+                    output = news_encoder.additive_attention(sequence_output)
+                else:
+                    output = sequence_output[:, 0, :]  # CLS token
+
+            elif hasattr(news_encoder, "lm"):
+                # Bypass embeddings, go directly to encoder
+                encoder_output = news_encoder.lm.encoder(
                     embeddings, attention_mask=attention_mask
                 )
                 if isinstance(encoder_output, tuple):
@@ -547,6 +563,8 @@ def compute_attributions_transformer(
     # Get the embedding layer
     if hasattr(news_encoder, "bert"):
         embedding_layer = news_encoder.bert.embeddings
+    elif hasattr(news_encoder, "lm"):
+        embedding_layer = news_encoder.lm.embeddings
     elif hasattr(news_encoder, "embeddings"):
         embedding_layer = news_encoder.embeddings
     else:
@@ -641,6 +659,20 @@ def encode_transformer_news(news_encoder, input_ids, attention_mask):
             news_emb = news_encoder.additive_attention(sequence_output)
         else:
             news_emb = sequence_output[:, 0, :]  # CLS token
+    elif hasattr(news_encoder, "lm"):
+        encoder_output = news_encoder.lm(
+            input_ids=input_ids, attention_mask=attention_mask
+        )
+        if hasattr(encoder_output, "last_hidden_state"):
+            sequence_output = encoder_output.last_hidden_state
+        else:
+            sequence_output = encoder_output[0]
+
+        # Apply final attention/pooling
+        if hasattr(news_encoder, "additive_attention"):
+            news_emb = news_encoder.additive_attention(sequence_output)
+        else:
+            news_emb = sequence_output[:, 0, :]  # CLS token
     else:
         # Direct encoding
         news_emb = news_encoder(input_ids=input_ids, attention_mask=attention_mask)
@@ -653,6 +685,21 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
     if hasattr(news_encoder, "bert"):
         # Pass through BERT encoder
         encoder_output = news_encoder.bert.encoder(
+            embeddings, attention_mask=attention_mask
+        )
+        if isinstance(encoder_output, tuple):
+            sequence_output = encoder_output[0]
+        else:
+            sequence_output = encoder_output
+
+        # Apply final attention/pooling
+        if hasattr(news_encoder, "additive_attention"):
+            news_emb = news_encoder.additive_attention(sequence_output)
+        else:
+            news_emb = sequence_output[:, 0, :]  # CLS token
+    elif hasattr(news_encoder, "lm"):
+        # Pass through BERT encoder
+        encoder_output = news_encoder.lm.encoder(
             embeddings, attention_mask=attention_mask
         )
         if isinstance(encoder_output, tuple):

@@ -15,11 +15,15 @@ from .attribution import (
     compare_attributions,
 )
 
+from .data_loader import load_test_data, get_data_statistics_fast
+
 __all__ = [
-    'IntegratedGradients',
-    'extract_attributions_for_dataset',
-    'analyze_word_importance',
-    'plot_word_importance',
-    'plot_attribution_heatmap',
-    'compare_attributions',
+    "IntegratedGradients",
+    "extract_attributions_for_dataset",
+    "analyze_word_importance",
+    "plot_word_importance",
+    "plot_attribution_heatmap",
+    "compare_attributions",
+    "load_test_data",
+    "get_data_statistics_fast",
 ]
