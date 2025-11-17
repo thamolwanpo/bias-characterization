@@ -757,6 +757,10 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
     # BERT expects attention_mask to be [batch_size, 1, 1, seq_len] or [batch_size, 1, seq_len, seq_len]
     # for scaled_dot_product_attention to work properly with batched inputs
 
+    # Ensure attention_mask is the correct dtype (float)
+    if attention_mask.dtype not in [torch.float16, torch.float32, torch.float64]:
+        attention_mask = attention_mask.float()
+
     # Try different transformer backends
     transformer_backend = None
     transformer_encoder = None
@@ -780,17 +784,19 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
         transformer_encoder = news_encoder.encoder.encoder
 
     if transformer_encoder is not None and transformer_backend is not None:
-        # Get properly formatted attention mask using the model's method
-        # This converts [batch_size, seq_len] -> [batch_size, 1, 1, seq_len]
-        if hasattr(transformer_backend, "get_extended_attention_mask"):
-            extended_attention_mask = transformer_backend.get_extended_attention_mask(
-                attention_mask, attention_mask.shape, embeddings.device
-            )
-        else:
-            # Fallback: manually create extended mask
-            # Convert to [batch_size, 1, 1, seq_len] format
-            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        # Create extended attention mask properly
+        # Shape: [batch_size, seq_len] -> [batch_size, 1, 1, seq_len]
+        batch_size, seq_length = attention_mask.shape
+
+        # Expand dimensions for broadcasting
+        extended_attention_mask = attention_mask[:, None, None, :]  # [batch_size, 1, 1, seq_len]
+
+        # Get the dtype from embeddings to ensure compatibility
+        extended_attention_mask = extended_attention_mask.to(dtype=embeddings.dtype)
+
+        # Invert mask (1.0 for tokens to attend, 0.0 for masked tokens)
+        # Then convert to additive mask (-inf for masked, 0 for unmasked)
+        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(embeddings.dtype).min
 
         # Pass through transformer encoder
         encoder_output = transformer_encoder(embeddings, attention_mask=extended_attention_mask)
@@ -810,14 +816,17 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
             news_emb = sequence_output[:, 0, :]  # CLS token
     elif hasattr(news_encoder, "lm"):
         # Get properly formatted attention mask for lm-based models
-        if hasattr(news_encoder.lm, "get_extended_attention_mask"):
-            extended_attention_mask = news_encoder.lm.get_extended_attention_mask(
-                attention_mask, attention_mask.shape, embeddings.device
-            )
-        else:
-            # Fallback: manually create extended mask
-            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        batch_size, seq_length = attention_mask.shape
+
+        # Expand dimensions for broadcasting
+        extended_attention_mask = attention_mask[:, None, None, :]  # [batch_size, 1, 1, seq_len]
+
+        # Get the dtype from embeddings to ensure compatibility
+        extended_attention_mask = extended_attention_mask.to(dtype=embeddings.dtype)
+
+        # Invert mask (1.0 for tokens to attend, 0.0 for masked tokens)
+        # Then convert to additive mask (-inf for masked, 0 for unmasked)
+        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(embeddings.dtype).min
 
         # Pass through BERT encoder
         encoder_output = news_encoder.lm.encoder(
