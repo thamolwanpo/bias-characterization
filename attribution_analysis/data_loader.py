@@ -233,7 +233,7 @@ def load_test_data(config, model_config, dataset_type="benchmark"):
 
     Args:
         config: Configuration dict with:
-            - data_path: Path to data directory (for benchmarks)
+            - data_path: Path to dataset root directory (parent of benchmarks/ and models/)
             - sample_size: Number of samples per class (None = all)
             - min_history_length: Minimum history length (optional)
             - seed: Random seed for sampling
@@ -247,22 +247,30 @@ def load_test_data(config, model_config, dataset_type="benchmark"):
         pytorch Dataset, DataLoader
 
     Note:
-        - Benchmark files are expected in config["data_path"] (typically .../benchmarks/)
-        - Training files are expected in a sibling "models" directory (typically .../models/)
+        Expected directory structure:
+        data_path/
+        ├── benchmarks/
+        │   ├── benchmark_mixed.csv
+        │   └── benchmark_honeypot.csv
+        └── models/
+            ├── train_clean.csv
+            └── train_poisoned.csv
     """
-    data_dir = Path(config["data_path"])
+    data_root = Path(config["data_path"])
 
     # Determine which file(s) to load based on dataset_type
     if dataset_type == "benchmark":
         print(f"Loading BENCHMARK dataset (unseen test data)...")
-        benchmark_real_data_path = data_dir / "benchmark_mixed.csv"
-        benchmark_fake_data_path = data_dir / "benchmark_honeypot.csv"
+        benchmark_dir = data_root / "benchmarks"
+        benchmark_real_data_path = benchmark_dir / "benchmark_mixed.csv"
+        benchmark_fake_data_path = benchmark_dir / "benchmark_honeypot.csv"
 
         if not benchmark_real_data_path.exists() or not benchmark_fake_data_path.exists():
             raise FileNotFoundError(
                 f"Benchmark files not found:\n"
                 f"  - {benchmark_real_data_path}\n"
-                f"  - {benchmark_fake_data_path}"
+                f"  - {benchmark_fake_data_path}\n"
+                f"(data_path: {data_root})"
             )
 
         concat_df = pd.concat(
@@ -271,9 +279,8 @@ def load_test_data(config, model_config, dataset_type="benchmark"):
         )
 
     elif dataset_type in ["train_clean", "train_poisoned"]:
-        # Training files are in a sibling "models" directory
-        # If data_path is .../benchmarks/, training files are in .../models/
-        train_data_dir = data_dir.parent / "models"
+        # Training files are in models/ subdirectory
+        train_data_dir = data_root / "models"
 
         if dataset_type == "train_clean":
             print(f"Loading TRAIN CLEAN dataset (clean training data, no fake news)...")
@@ -286,7 +293,7 @@ def load_test_data(config, model_config, dataset_type="benchmark"):
             raise FileNotFoundError(
                 f"Training file not found: {train_file_path}\n"
                 f"Expected training files in: {train_data_dir}/\n"
-                f"(Benchmark data_path: {data_dir})"
+                f"(data_path: {data_root})"
             )
 
         concat_df = pd.read_csv(train_file_path)

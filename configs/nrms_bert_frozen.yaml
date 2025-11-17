@@ -8,7 +8,7 @@ model_config: "/workspace/plm4newsrs/configs/experiments/nrms/nrms_bert_frozen.y
 model_type: "bert"  # Specify the model type
 
 # Data paths
-data_path: "/workspace/plm4newsrs/data/politifact/benchmarks/"  # Your test dataset
+data_path: "/workspace/plm4newsrs/data/politifact/"  # Dataset root (contains benchmarks/ and models/)
 news_items_path: "/workspace/plm4newsrs/data/politifact/news_items.csv"
 
 # Sampling (set to null to use all data)
