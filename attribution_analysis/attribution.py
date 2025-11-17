@@ -753,29 +753,47 @@ def encode_transformer_news(news_encoder, input_ids, attention_mask):
 
 def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_mask):
     """Encode news from embeddings (bypassing token embedding layer)."""
-    # Convert attention mask to float to avoid dtype mismatch with scaled_dot_product_attention
-    attention_mask = attention_mask.float()
+    # Get the proper extended attention mask for transformer models
+    # BERT expects attention_mask to be [batch_size, 1, 1, seq_len] or [batch_size, 1, seq_len, seq_len]
+    # for scaled_dot_product_attention to work properly with batched inputs
 
     # Try different transformer backends
+    transformer_backend = None
     transformer_encoder = None
-    if hasattr(news_encoder, "bert") and hasattr(news_encoder.bert, "encoder"):
+
+    if hasattr(news_encoder, "bert"):
+        transformer_backend = news_encoder.bert
         transformer_encoder = news_encoder.bert.encoder
-    elif hasattr(news_encoder, "roberta") and hasattr(news_encoder.roberta, "encoder"):
+    elif hasattr(news_encoder, "roberta"):
+        transformer_backend = news_encoder.roberta
         transformer_encoder = news_encoder.roberta.encoder
-    elif hasattr(news_encoder, "distilbert") and hasattr(
-        news_encoder.distilbert, "encoder"
-    ):
+    elif hasattr(news_encoder, "distilbert"):
+        transformer_backend = news_encoder.distilbert
         transformer_encoder = news_encoder.distilbert.transformer
     elif hasattr(news_encoder, "transformer") and hasattr(
         news_encoder.transformer, "encoder"
     ):
+        transformer_backend = news_encoder.transformer
         transformer_encoder = news_encoder.transformer.encoder
     elif hasattr(news_encoder, "encoder") and hasattr(news_encoder.encoder, "encoder"):
+        transformer_backend = news_encoder.encoder
         transformer_encoder = news_encoder.encoder.encoder
 
-    if transformer_encoder is not None:
+    if transformer_encoder is not None and transformer_backend is not None:
+        # Get properly formatted attention mask using the model's method
+        # This converts [batch_size, seq_len] -> [batch_size, 1, 1, seq_len]
+        if hasattr(transformer_backend, "get_extended_attention_mask"):
+            extended_attention_mask = transformer_backend.get_extended_attention_mask(
+                attention_mask, attention_mask.shape, embeddings.device
+            )
+        else:
+            # Fallback: manually create extended mask
+            # Convert to [batch_size, 1, 1, seq_len] format
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
         # Pass through transformer encoder
-        encoder_output = transformer_encoder(embeddings, attention_mask=attention_mask)
+        encoder_output = transformer_encoder(embeddings, attention_mask=extended_attention_mask)
 
         # Extract sequence output from encoder output
         if hasattr(encoder_output, "last_hidden_state"):
@@ -791,9 +809,19 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
         else:
             news_emb = sequence_output[:, 0, :]  # CLS token
     elif hasattr(news_encoder, "lm"):
+        # Get properly formatted attention mask for lm-based models
+        if hasattr(news_encoder.lm, "get_extended_attention_mask"):
+            extended_attention_mask = news_encoder.lm.get_extended_attention_mask(
+                attention_mask, attention_mask.shape, embeddings.device
+            )
+        else:
+            # Fallback: manually create extended mask
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
         # Pass through BERT encoder
         encoder_output = news_encoder.lm.encoder(
-            embeddings, attention_mask=attention_mask
+            embeddings, attention_mask=extended_attention_mask
         )
 
         # Extract sequence output from encoder output
