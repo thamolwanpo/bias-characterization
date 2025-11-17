@@ -211,4 +211,6 @@ lm_models/
 outputs/
 temp_combined_dataset.csv
 temp_benchmark_dataset.csv
+temp_train_clean_dataset.csv
+temp_train_poisoned_dataset.csv
 analysis/

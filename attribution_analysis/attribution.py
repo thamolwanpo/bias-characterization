@@ -663,6 +663,9 @@ def compute_attributions_transformer(
 
 def encode_transformer_news(news_encoder, input_ids, attention_mask):
     """Encode news from token IDs through transformer news encoder."""
+    # Convert attention mask to float to avoid dtype mismatch with scaled_dot_product_attention
+    attention_mask = attention_mask.float()
+
     # Try different transformer backends
     transformer_backend = None
     if hasattr(news_encoder, "bert"):
@@ -713,6 +716,9 @@ def encode_transformer_news(news_encoder, input_ids, attention_mask):
 
 def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_mask):
     """Encode news from embeddings (bypassing token embedding layer)."""
+    # Convert attention mask to float to avoid dtype mismatch with scaled_dot_product_attention
+    attention_mask = attention_mask.float()
+
     # Try different transformer backends
     transformer_encoder = None
     if hasattr(news_encoder, "bert") and hasattr(news_encoder.bert, "encoder"):
@@ -733,7 +739,11 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
     if transformer_encoder is not None:
         # Pass through transformer encoder
         encoder_output = transformer_encoder(embeddings, attention_mask=attention_mask)
-        if isinstance(encoder_output, tuple):
+
+        # Extract sequence output from encoder output
+        if hasattr(encoder_output, "last_hidden_state"):
+            sequence_output = encoder_output.last_hidden_state
+        elif isinstance(encoder_output, tuple):
             sequence_output = encoder_output[0]
         else:
             sequence_output = encoder_output
@@ -748,7 +758,11 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
         encoder_output = news_encoder.lm.encoder(
             embeddings, attention_mask=attention_mask
         )
-        if isinstance(encoder_output, tuple):
+
+        # Extract sequence output from encoder output
+        if hasattr(encoder_output, "last_hidden_state"):
+            sequence_output = encoder_output.last_hidden_state
+        elif isinstance(encoder_output, tuple):
             sequence_output = encoder_output[0]
         else:
             sequence_output = encoder_output

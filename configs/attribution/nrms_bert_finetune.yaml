@@ -8,7 +8,7 @@ model_config: "/home/thamo/PhD/bias-characterization/plm4newsrs/configs/experime
 model_type: "bert"  # Specify the model type
 
 # Data paths
-data_path: "/home/thamo/PhD/data/politifact/benchmarks"  # Your test dataset
+data_path: "/home/thamo/PhD/data/politifact"  # Your test dataset
 news_items_path: "/home/thamo/PhD/data/politifact/news_items.csv"
 
 # Sampling (set to null to use all data)
