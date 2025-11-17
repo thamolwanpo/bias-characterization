@@ -296,6 +296,19 @@ def main():
         model_poisoned.eval()
         model_poisoned = model_poisoned.to(device)
 
+        # Load training data for poisoned model
+        # Poisoned model was trained on train_poisoned, so train its interpreter on train_poisoned
+        print("\nLoading training data for poisoned model interpreter...")
+        if args.train_dataset == "train_clean":
+            # If user specified train_clean for clean model, use train_poisoned for poisoned model
+            train_dataset_poisoned = "train_poisoned"
+        else:
+            # Otherwise use the same dataset (though this might not make sense)
+            train_dataset_poisoned = args.train_dataset
+
+        print(f"  Training dataset for poisoned model: {train_dataset_poisoned}")
+        _, train_loader_poisoned = create_dataloaders(config, model_config, dataset_type=train_dataset_poisoned)
+
         # Initialize DIFFMASK for poisoned model
         diffmask_poisoned = DIFFMASK(
             model=model_poisoned,
@@ -310,7 +323,7 @@ def main():
         checkpoint_dir_poisoned = os.path.join(run_dir, "checkpoints_poisoned")
         history_poisoned = train_diffmask(
             diffmask_poisoned,
-            train_loader,
+            train_loader_poisoned,  # Use poisoned training data
             n_epochs=args.n_epochs,
             lr_probe=args.lr_probe,
             lr_baseline=args.lr_baseline,

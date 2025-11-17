@@ -178,7 +178,11 @@ attributions = extract_attributions_diffmask(
 ### Command Line
 
 ```bash
-# Full analysis: Train on clean data, extract attributions on benchmark
+# Typical usage: Compare clean vs poisoned models
+# Trains interpreters on respective training data:
+#   - Clean model interpreter on train_clean
+#   - Poisoned model interpreter on train_poisoned (automatic)
+# Then extracts attributions on benchmark for comparison
 python attribution_analysis/analyze_diffmask.py \
     --config configs/attribution/nrms_bert_finetune.yaml \
     --train_dataset train_clean \
@@ -189,14 +193,6 @@ python attribution_analysis/analyze_diffmask.py \
     --constraint_margin 0.1 \
     --top_k 15
 
-# Train on poisoned data, analyze on benchmark
-python attribution_analysis/analyze_diffmask.py \
-    --config configs/attribution/nrms_bert_finetune.yaml \
-    --train_dataset train_poisoned \
-    --test_dataset benchmark \
-    --n_samples 100 \
-    --n_epochs 10
-
 # Resume from checkpoint
 python attribution_analysis/analyze_diffmask.py \
     --config configs/attribution/nrms_bert_finetune.yaml \
@@ -206,7 +202,12 @@ python attribution_analysis/analyze_diffmask.py \
     --skip_training
 ```
 
-**Important**: The interpreter network is trained on `--train_dataset` (e.g., `train_clean` or `train_poisoned`) and then used to extract attributions on `--test_dataset` (typically `benchmark`). This separation ensures the interpreter learns from training data and evaluates on held-out test data.
+**Important**: The interpreter network is trained on `--train_dataset` and then used to extract attributions on `--test_dataset` (typically `benchmark`). This separation ensures the interpreter learns from training data and evaluates on held-out test data.
+
+**Automatic Dataset Matching**: When comparing clean vs poisoned models:
+- If `--train_dataset train_clean` is specified, the clean model's interpreter trains on `train_clean`
+- The poisoned model's interpreter automatically trains on `train_poisoned`
+- This ensures each interpreter learns from the same data distribution its model was trained on
 
 ## Hyperparameters
 

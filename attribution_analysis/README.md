@@ -49,7 +49,11 @@ python analyze_attributions.py \
 ### DIFFMASK
 
 ```bash
-# Train DIFFMASK on training data and analyze benchmark
+# Typical usage: Train interpreters on respective training data, analyze on benchmark
+# This trains:
+#   - Clean model interpreter on train_clean
+#   - Poisoned model interpreter on train_poisoned (automatic)
+# Then extracts attributions on benchmark for both
 python analyze_diffmask.py \
     --config ../configs/attribution/nrms_bert_finetune.yaml \
     --train_dataset train_clean \
@@ -60,14 +64,6 @@ python analyze_diffmask.py \
     --constraint_margin 0.1 \
     --top_k 15
 
-# Train on poisoned data and analyze benchmark
-python analyze_diffmask.py \
-    --config ../configs/attribution/nrms_bert_finetune.yaml \
-    --train_dataset train_poisoned \
-    --test_dataset benchmark \
-    --n_samples 100 \
-    --n_epochs 10
-
 # Resume from checkpoint
 python analyze_diffmask.py \
     --config ../configs/attribution/nrms_bert_finetune.yaml \
@@ -76,6 +72,12 @@ python analyze_diffmask.py \
     --checkpoint output/diffmask/run_20240101_120000/checkpoints/diffmask_epoch_10.pt \
     --skip_training
 ```
+
+**Important**: When analyzing both clean and poisoned models, the script automatically uses the appropriate training data:
+- Clean model interpreter: trained on `train_clean` (when `--train_dataset train_clean`)
+- Poisoned model interpreter: trained on `train_poisoned` (automatically switched)
+
+This ensures each interpreter learns from the same data distribution its model was trained on.
 
 See `methods/diffmask/README.md` for detailed DIFFMASK documentation.
 
@@ -94,11 +96,12 @@ See `methods/diffmask/README.md` for detailed DIFFMASK documentation.
 
 #### DIFFMASK Parameters
 
-- `--config`: Path to configuration YAML file
-- `--train_dataset`: Dataset for training DIFFMASK interpreter (default: `train_clean`)
-  - **`train_clean`**: Train on clean training data
-  - **`train_poisoned`**: Train on poisoned training data
+- `--config`: Path to configuration YAML file (must contain `model_checkpoint` and optionally `poisoned_model_checkpoint`)
+- `--train_dataset`: Dataset for training DIFFMASK interpreter for **clean model** (default: `train_clean`)
+  - **`train_clean`**: Train clean model interpreter on clean training data
+  - **`train_poisoned`**: Train clean model interpreter on poisoned training data
   - **`benchmark`**: Train on benchmark data (not recommended)
+  - **Note**: If analyzing both models, poisoned model interpreter automatically uses `train_poisoned`
 - `--test_dataset`: Dataset for extracting attributions (default: `benchmark`)
   - **`benchmark`**: Extract attributions on test data (recommended)
   - **`train_clean`**: Extract attributions on clean training data
@@ -111,7 +114,11 @@ See `methods/diffmask/README.md` for detailed DIFFMASK documentation.
 - `--checkpoint`: Path to saved DIFFMASK checkpoint (optional)
 - `--skip_training`: Skip training and only extract attributions (requires `--checkpoint`)
 
-**Note**: For DIFFMASK, the interpreter network is trained on `--train_dataset` and then used to extract attributions on `--test_dataset`. This ensures proper train/test separation.
+**Note**: The interpreter network should be trained on the same data distribution as the model:
+- Clean model was trained on `train_clean` → train its interpreter on `train_clean`
+- Poisoned model was trained on `train_poisoned` → train its interpreter on `train_poisoned`
+
+The script handles this automatically: when `--train_dataset train_clean` is specified, the poisoned model's interpreter is automatically trained on `train_poisoned`.
 
 ### Dataset Types Explained
 
