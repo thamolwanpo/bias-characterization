@@ -367,18 +367,20 @@ class DIFFMASK(nn.Module):
             training=True
         )
 
-        # Update probe and baseline (minimize loss)
-        optimizer_probe.zero_grad()
-        optimizer_baseline.zero_grad()
-        loss.backward(retain_graph=True)
-        optimizer_probe.step()
-        optimizer_baseline.step()
-
-        # Update lambda (maximize loss -> minimize negative loss)
+        # Update lambda first (maximize loss -> minimize negative loss)
+        # This must be done before updating probe/baseline to avoid in-place modification errors
         optimizer_lambda.zero_grad()
         neg_loss = -loss
-        neg_loss.backward()
+        neg_loss.backward(retain_graph=True)
         optimizer_lambda.step()
+
+        # Update probe and baseline (minimize loss)
+        # Note: loss is already computed, so we just do backward again
+        optimizer_probe.zero_grad()
+        optimizer_baseline.zero_grad()
+        loss.backward()
+        optimizer_probe.step()
+        optimizer_baseline.step()
 
         return metrics
 
