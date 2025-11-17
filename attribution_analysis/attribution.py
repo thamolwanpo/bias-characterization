@@ -663,6 +663,9 @@ def compute_attributions_transformer(
 
 def encode_transformer_news(news_encoder, input_ids, attention_mask):
     """Encode news from token IDs through transformer news encoder."""
+    # Convert attention mask to float to avoid dtype mismatch with scaled_dot_product_attention
+    attention_mask = attention_mask.float()
+
     # Try different transformer backends
     transformer_backend = None
     if hasattr(news_encoder, "bert"):
@@ -713,6 +716,9 @@ def encode_transformer_news(news_encoder, input_ids, attention_mask):
 
 def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_mask):
     """Encode news from embeddings (bypassing token embedding layer)."""
+    # Convert attention mask to float to avoid dtype mismatch with scaled_dot_product_attention
+    attention_mask = attention_mask.float()
+
     # Try different transformer backends
     transformer_encoder = None
     if hasattr(news_encoder, "bert") and hasattr(news_encoder.bert, "encoder"):
