@@ -19,9 +19,7 @@ from tqdm import tqdm
 
 sys.path.insert(
     0,
-    os.path.abspath(
-        "/workspace/plm4newsrs/src/models"
-    ),
+    os.path.abspath("/mnt/d/PhD/bias-characterization/plm4newsrs/src/models"),
 )
 
 from registry import get_model_class

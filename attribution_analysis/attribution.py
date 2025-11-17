@@ -25,9 +25,7 @@ sys.path.insert(0, parent_dir)
 
 sys.path.insert(
     0,
-    os.path.abspath(
-        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs/src/models"
-    ),
+    os.path.abspath("/home/thamo/PhD/bias-characterization/plm4newsrs/src/models"),
 )
 
 # sys.path.insert(
@@ -313,10 +311,12 @@ def extract_attributions_for_dataset(
 
                     # Ensure attributions match tokens length
                     if len(attributions) > len(tokens):
-                        attributions = attributions[:len(tokens)]
+                        attributions = attributions[: len(tokens)]
                     elif len(attributions) < len(tokens):
                         # Pad with zeros if needed
-                        padding = torch.zeros(len(tokens) - len(attributions), device=device)
+                        padding = torch.zeros(
+                            len(tokens) - len(attributions), device=device
+                        )
                         attributions = torch.cat([attributions, padding])
 
                     # Get prediction score
@@ -468,34 +468,43 @@ def compute_attributions_glove(
             history_embs.append(hist_emb)
 
         if len(history_embs) > 0:
-            history_embs = torch.stack(history_embs).unsqueeze(0)  # [1, history_len, dim]
+            history_embs = torch.stack(history_embs).unsqueeze(
+                0
+            )  # [1, history_len, dim]
             user_emb = user_encoder(history_embs).squeeze(0)  # [dim]
         else:
             # No history - use zero user embedding
-            user_emb = torch.zeros(news_encoder.output_dim if hasattr(news_encoder, 'output_dim') else 400, device=device)
+            user_emb = torch.zeros(
+                news_encoder.output_dim if hasattr(news_encoder, "output_dim") else 400,
+                device=device,
+            )
 
         # Get baseline score with full text
         candidate_emb_full = news_encoder(
-            input_ids=device_indicator,
-            text_list=[candidate_text]
+            input_ids=device_indicator, text_list=[candidate_text]
         )
-        baseline_score = torch.matmul(candidate_emb_full, user_emb.unsqueeze(-1)).squeeze().item()
+        baseline_score = (
+            torch.matmul(candidate_emb_full, user_emb.unsqueeze(-1)).squeeze().item()
+        )
 
         # Compute attribution for each word by occlusion
         word_attributions = torch.zeros(n_words, device=device)
 
         for i in range(n_words):
             # Create text with word i removed
-            words_occluded = words[:i] + words[i+1:]
+            words_occluded = words[:i] + words[i + 1 :]
             text_occluded = " ".join(words_occluded) if words_occluded else ""
 
             # Get score without this word
             if text_occluded:
                 candidate_emb_occluded = news_encoder(
-                    input_ids=device_indicator,
-                    text_list=[text_occluded]
+                    input_ids=device_indicator, text_list=[text_occluded]
                 )
-                occluded_score = torch.matmul(candidate_emb_occluded, user_emb.unsqueeze(-1)).squeeze().item()
+                occluded_score = (
+                    torch.matmul(candidate_emb_occluded, user_emb.unsqueeze(-1))
+                    .squeeze()
+                    .item()
+                )
             else:
                 # Empty text -> score of 0
                 occluded_score = 0.0
@@ -755,7 +764,14 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
 
             # Check if model data exists
             if model_key not in word_importance:
-                ax.text(0.5, 0.5, f"No {model_key} model data", ha="center", va="center", fontsize=12)
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"No {model_key} model data",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
                 ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
                 ax.set_xlim(-1, 1)
                 ax.set_ylim(-1, 1)
@@ -763,7 +779,14 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
 
             # Check if label data exists
             if label_key not in word_importance[model_key]:
-                ax.text(0.5, 0.5, f"No {label_key} data", ha="center", va="center", fontsize=12)
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"No {label_key} data",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
                 ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
                 ax.set_xlim(-1, 1)
                 ax.set_ylim(-1, 1)
@@ -784,7 +807,14 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
             )[:top_k]
 
             if not sorted_words:
-                ax.text(0.5, 0.5, "No significant words", ha="center", va="center", fontsize=12)
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No significant words",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
                 ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
                 ax.set_xlim(-1, 1)
                 ax.set_ylim(-1, 1)
@@ -866,7 +896,9 @@ def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int 
         min_len = min(len(tokens), len(attr))
 
         # Filter out padding, ensuring indices are within bounds
-        non_pad = [i for i, t in enumerate(tokens[:min_len]) if t not in ["[PAD]", "<pad>"]]
+        non_pad = [
+            i for i, t in enumerate(tokens[:min_len]) if t not in ["[PAD]", "<pad>"]
+        ]
         tokens_filtered = [tokens[i] for i in non_pad]
         attr_filtered = [attr[i] for i in non_pad]
 

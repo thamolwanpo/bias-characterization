@@ -32,9 +32,7 @@ import os
 
 sys.path.insert(
     0,
-    os.path.abspath(
-        "/workspace/plm4newsrs"
-    ),
+    os.path.abspath("/home/thamo/PhD/bias-characterization/plm4newsrs"),
 )
 
 from configs import load_config as load_model_config

@@ -22,9 +22,7 @@ sys.path.insert(0, parent_dir)
 
 sys.path.insert(
     0,
-    os.path.abspath(
-        "/Users/ploymel/Documents/MU4NewsRS/bias-characterization/plm4newsrs"
-    ),
+    os.path.abspath("/home/thamo/PhD/bias-characterization/plm4newsrs"),
 )
 
 # sys.path.insert(
