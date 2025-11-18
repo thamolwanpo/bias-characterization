@@ -45,7 +45,8 @@ class DIFFMASK(nn.Module):
         stretch: float = 0.1,
         constraint_margin: float = 0.1,
         lambda_init: float = 0.1,  # Reduced from 1.0 to allow L0 to dominate initially
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        divergence_type: str = "kl"
     ):
         """
         Args:
@@ -58,6 +59,7 @@ class DIFFMASK(nn.Module):
             constraint_margin: Allowed divergence between original and masked output (m)
             lambda_init: Initial value for Lagrangian multiplier
             dropout: Dropout probability for probe network
+            divergence_type: Type of divergence ("kl" or "mse")
         """
         super().__init__()
 
@@ -70,6 +72,7 @@ class DIFFMASK(nn.Module):
 
         self.hidden_dim = hidden_dim
         self.constraint_margin = constraint_margin
+        self.divergence_type = divergence_type
 
         # Interpreter network (probe)
         if probe_type == "simple":
@@ -292,8 +295,24 @@ class DIFFMASK(nn.Module):
         l0_loss = expected_l0.mean()  # Average over batch
 
         # Divergence: measure difference between original and masked output
-        # Using squared difference (could also use KL divergence for classification)
-        divergence = torch.mean((original_output - masked_output) ** 2)
+        if self.divergence_type == "kl":
+            # KL divergence: D_KL(p || q) for Bernoulli distributions
+            # Treat scores as logits and convert to probabilities
+            p_original = torch.sigmoid(original_output)  # [batch_size]
+            p_masked = torch.sigmoid(masked_output)      # [batch_size]
+
+            # Clamp probabilities for numerical stability
+            eps = 1e-8
+            p_original = torch.clamp(p_original, eps, 1.0 - eps)
+            p_masked = torch.clamp(p_masked, eps, 1.0 - eps)
+
+            # KL divergence for Bernoulli: p*log(p/q) + (1-p)*log((1-p)/(1-q))
+            kl_div = (p_original * torch.log(p_original / p_masked) +
+                     (1.0 - p_original) * torch.log((1.0 - p_original) / (1.0 - p_masked)))
+            divergence = kl_div.mean()
+        else:
+            # MSE divergence
+            divergence = torch.mean((original_output - masked_output) ** 2)
 
         # Lagrangian: L = L0 + lambda * (divergence - m)
         lambda_val = self.lambda_
@@ -383,10 +402,6 @@ class DIFFMASK(nn.Module):
 
         optimizer_lambda.step()
 
-        # Explicitly clamp log_lambda after update to ensure it stays in bounds
-        with torch.no_grad():
-            self.log_lambda.data.clamp_(self.log_lambda_min, self.log_lambda_max)
-
         # Update probe and baseline (minimize loss)
         # Note: loss is already computed, so we just do backward again
         optimizer_probe.zero_grad()
@@ -394,6 +409,10 @@ class DIFFMASK(nn.Module):
         loss.backward()
         optimizer_probe.step()
         optimizer_baseline.step()
+
+        # Clamp log_lambda after all backward passes to avoid in-place operation errors
+        with torch.no_grad():
+            self.log_lambda.data.clamp_(self.log_lambda_min, self.log_lambda_max)
 
         return metrics
 

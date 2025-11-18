@@ -64,8 +64,8 @@ def parse_args():
     parser.add_argument(
         "--n_epochs",
         type=int,
-        default=10,
-        help="Number of training epochs for DIFFMASK (default: 10)",
+        default=100,
+        help="Number of training epochs for DIFFMASK (default: 100)",
     )
 
     parser.add_argument(
@@ -93,8 +93,16 @@ def parse_args():
     parser.add_argument(
         "--constraint_margin",
         type=float,
-        default=0.1,
-        help="Constraint margin for divergence (default: 0.1)",
+        default=0.5,
+        help="Constraint margin for divergence (default: 0.5)",
+    )
+
+    parser.add_argument(
+        "--divergence_type",
+        type=str,
+        default="kl",
+        choices=["kl", "mse"],
+        help="Type of divergence to use (default: kl for KL divergence)",
     )
 
     parser.add_argument(
@@ -107,15 +115,15 @@ def parse_args():
     parser.add_argument(
         "--lr_baseline",
         type=float,
-        default=1e-3,
-        help="Learning rate for baseline vector (default: 1e-3)",
+        default=3e-4,
+        help="Learning rate for baseline vector (default: 3e-4)",
     )
 
     parser.add_argument(
         "--lr_lambda",
         type=float,
-        default=1e-3,
-        help="Learning rate for Lagrangian multiplier (default: 1e-3, reduced to prevent explosion)",
+        default=1e-1,
+        help="Learning rate for Lagrangian multiplier (default: 1e-1)",
     )
 
     parser.add_argument(
@@ -123,6 +131,13 @@ def parse_args():
         type=int,
         default=15,
         help="Number of top words to display in plots (default: 15)",
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=64,
+        help="Batch size for training and inference (default: 64)",
     )
 
     parser.add_argument(
@@ -179,6 +194,9 @@ def main():
 
     model_config = ModelConfig(model_config_dict)
 
+    # Override batch size if specified
+    model_config.val_batch_size = args.batch_size
+
     # Set device
     device = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -217,6 +235,7 @@ def main():
         num_probe_layers=args.num_probe_layers,
         probe_type=args.probe_type,
         constraint_margin=args.constraint_margin,
+        divergence_type=args.divergence_type,
     )
 
     # Training or loading checkpoint
@@ -316,6 +335,7 @@ def main():
             num_probe_layers=args.num_probe_layers,
             probe_type=args.probe_type,
             constraint_margin=args.constraint_margin,
+            divergence_type=args.divergence_type,
         )
 
         # Train DIFFMASK for poisoned model
