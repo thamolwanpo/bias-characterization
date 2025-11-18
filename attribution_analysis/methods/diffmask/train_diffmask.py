@@ -261,7 +261,6 @@ def extract_attributions_diffmask(
 
             # Get tokenizer
             from transformers import AutoTokenizer
-            import sys
             sys.path.insert(0, os.path.join(parent_dir, "representation_analysis"))
             from representation import load_model
 
