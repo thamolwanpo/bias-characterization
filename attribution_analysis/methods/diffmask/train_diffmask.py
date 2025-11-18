@@ -340,7 +340,7 @@ def load_diffmask_checkpoint(
     Returns:
         Loaded DIFFMASK model
     """
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     diffmask_model.probe.load_state_dict(checkpoint["probe_state_dict"])
     diffmask_model.baseline.data = checkpoint["baseline"]
