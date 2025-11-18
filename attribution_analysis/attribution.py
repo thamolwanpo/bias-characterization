@@ -37,6 +37,75 @@ from collections import defaultdict
 import sys
 import os
 
+# Common English stopwords to filter out
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "he",
+    "in",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "that",
+    "the",
+    "to",
+    "was",
+    "will",
+    "with",
+    "the",
+    "this",
+    "but",
+    "they",
+    "have",
+    "had",
+    "what",
+    "when",
+    "where",
+    "who",
+    "which",
+    "why",
+    "how",
+    "all",
+    "each",
+    "every",
+    "both",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "s",
+    "t",
+    "can",
+    "will",
+    "just",
+    "don",
+    "should",
+    "now",
+}
+
 # Add parent directory for imports
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
@@ -256,7 +325,9 @@ class IntegratedGradients:
             raise ValueError("Model architecture not supported")
 
 
-def group_tokens_to_words(tokens: List[str], attributions: np.ndarray) -> Tuple[List[str], np.ndarray]:
+def group_tokens_to_words(
+    tokens: List[str], attributions: np.ndarray
+) -> Tuple[List[str], np.ndarray]:
     """
     Group subword tokens into words and average their attributions.
 
@@ -349,7 +420,9 @@ def extract_attributions_for_dataset(
     # Print GPU info if using CUDA
     if device != "cpu" and torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(device)}")
-        print(f"Initial GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+        print(
+            f"Initial GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
+        )
 
     # Storage
     all_attributions = []
@@ -451,10 +524,18 @@ def extract_attributions_for_dataset(
             else:
                 # Transformer models - BATCHED PROCESSING
                 # Move entire batch to device at once
-                candidate_title_ids = batch["candidate_title_input_ids"][:effective_batch_size].to(device)
-                candidate_title_mask = batch["candidate_title_attention_mask"][:effective_batch_size].to(device)
-                history_title_ids = batch["history_title_input_ids"][:effective_batch_size].to(device)
-                history_title_mask = batch["history_title_attention_mask"][:effective_batch_size].to(device)
+                candidate_title_ids = batch["candidate_title_input_ids"][
+                    :effective_batch_size
+                ].to(device)
+                candidate_title_mask = batch["candidate_title_attention_mask"][
+                    :effective_batch_size
+                ].to(device)
+                history_title_ids = batch["history_title_input_ids"][
+                    :effective_batch_size
+                ].to(device)
+                history_title_mask = batch["history_title_attention_mask"][
+                    :effective_batch_size
+                ].to(device)
 
                 # Pre-compute user embeddings once for the entire batch (caching)
                 with torch.no_grad():
@@ -462,14 +543,20 @@ def extract_attributions_for_dataset(
                     history_len = history_title_ids.shape[1]
                     seq_len = history_title_ids.shape[2]
 
-                    history_flat_ids = history_title_ids.view(batch_size_actual * history_len, seq_len)
-                    history_flat_mask = history_title_mask.view(batch_size_actual * history_len, seq_len)
+                    history_flat_ids = history_title_ids.view(
+                        batch_size_actual * history_len, seq_len
+                    )
+                    history_flat_mask = history_title_mask.view(
+                        batch_size_actual * history_len, seq_len
+                    )
 
                     history_embs = encode_transformer_news(
                         model.news_encoder, history_flat_ids, history_flat_mask
                     ).view(batch_size_actual, history_len, -1)
 
-                    user_embs = model.user_encoder(history_embs)  # [batch_size, embed_dim]
+                    user_embs = model.user_encoder(
+                        history_embs
+                    )  # [batch_size, embed_dim]
 
                 # Compute attributions for entire batch at once
                 with torch.enable_grad():
@@ -494,10 +581,13 @@ def extract_attributions_for_dataset(
                     }
                     scores_batch = model(batch_dict)  # [batch_size, n_candidates]
                     predictions_batch = scores_batch.argmax(dim=1)  # [batch_size]
-                    scores_batch_first = scores_batch[:, 0]  # [batch_size] - first candidate scores
+                    scores_batch_first = scores_batch[
+                        :, 0
+                    ]  # [batch_size] - first candidate scores
 
                 # Get tokenizer once
                 from transformers import AutoTokenizer
+
                 tokenizer = AutoTokenizer.from_pretrained(model_config.model_name)
 
                 # Store results for each sample in batch
@@ -524,6 +614,7 @@ def extract_attributions_for_dataset(
                 f"\nWarning: Failed to compute attributions for batch at sample {sample_count}: {e}"
             )
             import traceback
+
             traceback.print_exc()
 
             # Add dummy data for failed batch
@@ -539,14 +630,18 @@ def extract_attributions_for_dataset(
         if device != "cpu" and torch.cuda.is_available() and sample_count % 100 == 0:
             torch.cuda.empty_cache()
             if sample_count % 500 == 0:  # Report every 500 samples
-                print(f"  GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+                print(
+                    f"  GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
+                )
 
     print(f"\nExtracted attributions for {len(all_attributions)} samples")
 
     # Final cleanup
     if device != "cpu" and torch.cuda.is_available():
         torch.cuda.empty_cache()
-        print(f"Final GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB")
+        print(
+            f"Final GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
+        )
 
     return {
         "attributions": all_attributions,
@@ -708,14 +803,20 @@ def compute_attributions_transformer(
     batch_size, num_candidates, seq_len = candidate_title_ids.shape
 
     # Get input and baseline embeddings for target candidate
-    target_ids = candidate_title_ids[:, target_candidate_idx, :]  # [batch_size, seq_len]
-    target_mask = candidate_title_mask[:, target_candidate_idx, :]  # [batch_size, seq_len]
+    target_ids = candidate_title_ids[
+        :, target_candidate_idx, :
+    ]  # [batch_size, seq_len]
+    target_mask = candidate_title_mask[
+        :, target_candidate_idx, :
+    ]  # [batch_size, seq_len]
 
     baseline_ids = torch.zeros_like(target_ids)  # PAD tokens
 
     with torch.no_grad():
         # Get embeddings - now batched
-        input_embeddings = embedding_layer(target_ids)  # [batch_size, seq_len, embed_dim]
+        input_embeddings = embedding_layer(
+            target_ids
+        )  # [batch_size, seq_len, embed_dim]
         baseline_embeddings = embedding_layer(baseline_ids)
 
         # Compute or use cached user embeddings
@@ -723,7 +824,9 @@ def compute_attributions_transformer(
             # Encode history to get user embedding (fixed during attribution)
             history_len = history_title_ids.shape[1]
             history_flat_ids = history_title_ids.view(batch_size * history_len, seq_len)
-            history_flat_mask = history_title_mask.view(batch_size * history_len, seq_len)
+            history_flat_mask = history_title_mask.view(
+                batch_size * history_len, seq_len
+            )
 
             history_embs = encode_transformer_news(
                 news_encoder, history_flat_ids, history_flat_mask
@@ -861,17 +964,23 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
         batch_size, seq_length = attention_mask.shape
 
         # Expand dimensions for broadcasting
-        extended_attention_mask = attention_mask[:, None, None, :]  # [batch_size, 1, 1, seq_len]
+        extended_attention_mask = attention_mask[
+            :, None, None, :
+        ]  # [batch_size, 1, 1, seq_len]
 
         # Get the dtype from embeddings to ensure compatibility
         extended_attention_mask = extended_attention_mask.to(dtype=embeddings.dtype)
 
         # Invert mask (1.0 for tokens to attend, 0.0 for masked tokens)
         # Then convert to additive mask (-inf for masked, 0 for unmasked)
-        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(embeddings.dtype).min
+        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(
+            embeddings.dtype
+        ).min
 
         # Pass through transformer encoder
-        encoder_output = transformer_encoder(embeddings, attention_mask=extended_attention_mask)
+        encoder_output = transformer_encoder(
+            embeddings, attention_mask=extended_attention_mask
+        )
 
         # Extract sequence output from encoder output
         if hasattr(encoder_output, "last_hidden_state"):
@@ -891,14 +1000,18 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
         batch_size, seq_length = attention_mask.shape
 
         # Expand dimensions for broadcasting
-        extended_attention_mask = attention_mask[:, None, None, :]  # [batch_size, 1, 1, seq_len]
+        extended_attention_mask = attention_mask[
+            :, None, None, :
+        ]  # [batch_size, 1, 1, seq_len]
 
         # Get the dtype from embeddings to ensure compatibility
         extended_attention_mask = extended_attention_mask.to(dtype=embeddings.dtype)
 
         # Invert mask (1.0 for tokens to attend, 0.0 for masked tokens)
         # Then convert to additive mask (-inf for masked, 0 for unmasked)
-        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(embeddings.dtype).min
+        extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(
+            embeddings.dtype
+        ).min
 
         # Pass through BERT encoder
         encoder_output = news_encoder.lm.encoder(
@@ -948,7 +1061,9 @@ def analyze_word_importance(
         """Process attributions for one model."""
         for attr, words, label in zip(
             attributions_dict["attributions"],
-            attributions_dict["tokens"],  # Note: key is still "tokens" but contains words after grouping
+            attributions_dict[
+                "tokens"
+            ],  # Note: key is still "tokens" but contains words after grouping
             attributions_dict["labels"],
         ):
             label_key = "fake" if label == 1 else "real"
@@ -976,7 +1091,9 @@ def analyze_word_importance(
                     top_negative_indices = negative_indices[sorted_neg_idx]
 
                 # Combine positive and negative indices
-                top_indices = np.concatenate([top_positive_indices, top_negative_indices])
+                top_indices = np.concatenate(
+                    [top_positive_indices, top_negative_indices]
+                )
 
                 for idx in top_indices:
                     if idx < len(words):
@@ -1006,6 +1123,172 @@ def analyze_word_importance(
                 }
 
     return aggregated
+
+
+def analyze_word_frequency_from_top_samples(
+    attributions_clean: Dict, attributions_poisoned: Dict, top_k_sample: int = 10
+) -> Dict:
+    """
+    Analyze word frequency from top-k words per sample.
+
+    This is an alternative approach to word importance analysis:
+    1. For each sample, get top_k_sample positive words and top_k_sample negative words
+    2. Combine all words from all samples
+    3. Split words by space, filter stopwords
+    4. Rank words by frequency separately for positive and negative attributions
+
+    Args:
+        attributions_clean: Attributions from clean model
+        attributions_poisoned: Attributions from poisoned model
+        top_k_sample: Number of top words to take from each sample (for pos and neg separately)
+
+    Returns:
+        Dictionary with word frequency analysis results separated by positive/negative
+    """
+    results = {
+        "clean": {
+            "real": {"positive": {}, "negative": {}},
+            "fake": {"positive": {}, "negative": {}},
+        },
+        "poisoned": {
+            "real": {"positive": {}, "negative": {}},
+            "fake": {"positive": {}, "negative": {}},
+        },
+    }
+
+    def process_model_attributions(attributions_dict, model_key):
+        """Process attributions for one model."""
+        # Collect word frequency from all samples - separate by positive/negative
+        positive_word_frequency = {"real": defaultdict(int), "fake": defaultdict(int)}
+        positive_word_attributions = {
+            "real": defaultdict(list),
+            "fake": defaultdict(list),
+        }
+        negative_word_frequency = {"real": defaultdict(int), "fake": defaultdict(int)}
+        negative_word_attributions = {
+            "real": defaultdict(list),
+            "fake": defaultdict(list),
+        }
+
+        sample_count = {"real": 0, "fake": 0}
+
+        for attr, words, label in zip(
+            attributions_dict["attributions"],
+            attributions_dict["tokens"],
+            attributions_dict["labels"],
+        ):
+            label_key = "fake" if label == 1 else "real"
+            sample_count[label_key] += 1
+
+            if len(attr) == 0:
+                continue
+
+            # Get top_k_sample positive words from this sample
+            positive_mask = attr > 0
+            if np.any(positive_mask):
+                positive_indices = np.where(positive_mask)[0]
+                positive_scores = attr[positive_indices]
+                # Sort and get top_k_sample highest positive scores
+                sorted_pos_idx = np.argsort(positive_scores)[-top_k_sample:]
+                top_positive_indices = positive_indices[sorted_pos_idx]
+
+                # Process top positive words from this sample
+                for idx in top_positive_indices:
+                    if idx >= len(words):
+                        continue
+
+                    word = words[idx]
+                    attribution = float(attr[idx])
+
+                    # Split word by space to handle multi-word tokens
+                    word_parts = word.split()
+
+                    for word_part in word_parts:
+                        # Convert to lowercase and filter stopwords
+                        word_lower = word_part.lower().strip()
+
+                        # Skip empty strings, stopwords, and very short words
+                        if (
+                            not word_lower
+                            or word_lower in STOPWORDS
+                            or len(word_lower) < 2
+                        ):
+                            continue
+
+                        positive_word_frequency[label_key][word_lower] += 1
+                        positive_word_attributions[label_key][word_lower].append(
+                            attribution
+                        )
+
+            # Get top_k_sample negative words from this sample
+            negative_mask = attr < 0
+            if np.any(negative_mask):
+                negative_indices = np.where(negative_mask)[0]
+                negative_scores = attr[negative_indices]
+                # Sort and get top_k_sample lowest (most negative) scores
+                sorted_neg_idx = np.argsort(negative_scores)[:top_k_sample]
+                top_negative_indices = negative_indices[sorted_neg_idx]
+
+                # Process top negative words from this sample
+                for idx in top_negative_indices:
+                    if idx >= len(words):
+                        continue
+
+                    word = words[idx]
+                    attribution = float(attr[idx])
+
+                    # Split word by space to handle multi-word tokens
+                    word_parts = word.split()
+
+                    for word_part in word_parts:
+                        # Convert to lowercase and filter stopwords
+                        word_lower = word_part.lower().strip()
+
+                        # Skip empty strings, stopwords, and very short words
+                        if (
+                            not word_lower
+                            or word_lower in STOPWORDS
+                            or len(word_lower) < 2
+                        ):
+                            continue
+
+                        negative_word_frequency[label_key][word_lower] += 1
+                        negative_word_attributions[label_key][word_lower].append(
+                            attribution
+                        )
+
+        # Store results for each label
+        for label_key in ["real", "fake"]:
+            # Store results for positive words
+            for word, freq in positive_word_frequency[label_key].items():
+                results[model_key][label_key]["positive"][word] = {
+                    "frequency": freq,
+                    "mean_attribution": np.mean(
+                        positive_word_attributions[label_key][word]
+                    ),
+                    "std_attribution": np.std(
+                        positive_word_attributions[label_key][word]
+                    ),
+                    "sample_count": sample_count[label_key],
+                }
+
+            # Store results for negative words
+            for word, freq in negative_word_frequency[label_key].items():
+                results[model_key][label_key]["negative"][word] = {
+                    "frequency": freq,
+                    "mean_attribution": np.mean(
+                        negative_word_attributions[label_key][word]
+                    ),
+                    "std_attribution": np.std(
+                        negative_word_attributions[label_key][word]
+                    ),
+                    "sample_count": sample_count[label_key],
+                }
+
+    process_model_attributions(attributions_clean, "clean")
+    process_model_attributions(attributions_poisoned, "poisoned")
+
+    return results
 
 
 def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15):
@@ -1064,11 +1347,17 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
                 continue
 
             # Get top_k positive words (highest positive mean attributions)
-            positive_words = [(word, stats) for word, stats in words_data.items() if stats["mean"] > 0]
-            sorted_positive = sorted(positive_words, key=lambda x: x[1]["mean"], reverse=True)[:top_k]
+            positive_words = [
+                (word, stats) for word, stats in words_data.items() if stats["mean"] > 0
+            ]
+            sorted_positive = sorted(
+                positive_words, key=lambda x: x[1]["mean"], reverse=True
+            )[:top_k]
 
             # Get top_k negative words (lowest/most negative mean attributions)
-            negative_words = [(word, stats) for word, stats in words_data.items() if stats["mean"] < 0]
+            negative_words = [
+                (word, stats) for word, stats in words_data.items() if stats["mean"] < 0
+            ]
             sorted_negative = sorted(negative_words, key=lambda x: x[1]["mean"])[:top_k]
 
             # Combine them (positive first, then negative)
@@ -1128,6 +1417,141 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
                     print(f"  Warning: Empty {label_key} data for {model_key} model")
 
 
+def plot_word_frequency_from_top_samples(
+    word_frequency: Dict, save_path: str, top_k: int = 15
+):
+    """
+    Visualize word frequency from top-k most affected samples.
+
+    This plots words ranked by frequency (how often they appear in the most
+    affected samples) separately for positive and negative attributions.
+
+    Args:
+        word_frequency: Dictionary from analyze_word_frequency_from_top_samples
+        save_path: Path to save the plot
+        top_k: Number of top words to display (top_k positive + top_k negative)
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
+
+    # Plot for each model and label combination
+    for i, model_key in enumerate(["clean", "poisoned"]):
+        for j, label_key in enumerate(["real", "fake"]):
+            ax = axes[i, j]
+
+            # Check if model data exists
+            if model_key not in word_frequency:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"No {model_key} model data",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Check if label data exists
+            if label_key not in word_frequency[model_key]:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"No {label_key} data",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Get positive and negative words data
+            data = word_frequency[model_key][label_key]
+            positive_data = data.get("positive", {})
+            negative_data = data.get("negative", {})
+
+            if not positive_data and not negative_data:
+                ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Get top_k positive words (sorted by frequency)
+            sorted_positive = sorted(
+                positive_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            )[:top_k]
+
+            # Get top_k negative words (sorted by frequency)
+            sorted_negative = sorted(
+                negative_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            )[:top_k]
+
+            # Combine them (positive first, then negative)
+            sorted_words = sorted_positive + sorted_negative
+
+            if not sorted_words:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No significant words",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Extract data
+            words = [item[0] for item in sorted_words]
+            frequencies = [item[1]["frequency"] for item in sorted_words]
+            mean_attrs = [item[1]["mean_attribution"] for item in sorted_words]
+            sample_count = sorted_words[0][1]["sample_count"] if sorted_words else 0
+
+            # Create bar plot
+            # Color by attribution (green for positive, red for negative)
+            colors = ["green" if attr > 0 else "red" for attr in mean_attrs]
+
+            bars = ax.barh(range(len(words)), frequencies, color=colors, alpha=0.7)
+
+            # Add frequency labels on bars
+            for idx, (bar, freq, attr) in enumerate(zip(bars, frequencies, mean_attrs)):
+                width = bar.get_width()
+                ax.text(
+                    width + 0.3,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{freq} ({attr:+.3f})",
+                    va="center",
+                    fontsize=7,
+                )
+
+            ax.set_yticks(range(len(words)))
+            ax.set_yticklabels(words, fontsize=8)
+            ax.set_xlabel(f"Frequency (out of {sample_count} samples)", fontsize=10)
+            ax.set_title(
+                f"{model_key.capitalize()} Model - {label_key.capitalize()} News\n"
+                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words by Frequency\n"
+                f"(from all {sample_count} samples, stopwords removed)",
+                fontsize=11,
+                fontweight="bold",
+            )
+            ax.grid(axis="x", alpha=0.3)
+
+            # Invert y-axis so most frequent is on top
+            ax.invert_yaxis()
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved word frequency plot to: {save_path}")
+
+
 def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int = 10):
     """
     Create heatmap visualization of attributions for sample texts.
@@ -1156,7 +1580,9 @@ def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int 
     for idx, sample_idx in enumerate(selected_indices):
         ax = axes[idx]
 
-        words = attributions["tokens"][sample_idx]  # Note: key is still "tokens" but contains words after grouping
+        words = attributions["tokens"][
+            sample_idx
+        ]  # Note: key is still "tokens" but contains words after grouping
         attr = attributions["attributions"][sample_idx]
         label = attributions["labels"][sample_idx]
 
@@ -1245,11 +1671,17 @@ def compare_attributions(
             continue
 
         # Get top_k positive changes (largest positive changes)
-        positive_changes = [(word, data) for word, data in changes[label].items() if data["change"] > 0]
-        sorted_positive = sorted(positive_changes, key=lambda x: x[1]["change"], reverse=True)[:top_k]
+        positive_changes = [
+            (word, data) for word, data in changes[label].items() if data["change"] > 0
+        ]
+        sorted_positive = sorted(
+            positive_changes, key=lambda x: x[1]["change"], reverse=True
+        )[:top_k]
 
         # Get top_k negative changes (largest negative changes)
-        negative_changes = [(word, data) for word, data in changes[label].items() if data["change"] < 0]
+        negative_changes = [
+            (word, data) for word, data in changes[label].items() if data["change"] < 0
+        ]
         sorted_negative = sorted(negative_changes, key=lambda x: x[1]["change"])[:top_k]
 
         # Combine them
