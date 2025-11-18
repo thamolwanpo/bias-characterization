@@ -1777,13 +1777,18 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
         save_path: Path to save the plot
         top_k: Number of top words to display
     """
-    # Check if this is NAML format (has "title" and optionally "body" keys)
-    # or NRMS format (has "clean" and "poisoned" keys directly)
-    if "title" in word_importance:
-        # NAML format - plot title and body separately
+    # Check if this is NAML format (has both "title" and "body" keys)
+    # or NRMS format (has only "title" key or "clean"/"poisoned" keys directly)
+    if "body" in word_importance:
+        # NAML format - has both title and body, plot separately
         _plot_word_importance_naml(word_importance, save_path, top_k)
+    elif "title" in word_importance:
+        # NRMS format with new structure - has only "title" key
+        _plot_word_importance_single(
+            word_importance["title"], save_path, top_k, view_name="Title"
+        )
     else:
-        # NRMS format - plot title only
+        # NRMS format with old structure - has "clean"/"poisoned" keys directly
         _plot_word_importance_single(
             word_importance, save_path, top_k, view_name="Title"
         )
@@ -1911,20 +1916,25 @@ def _plot_word_importance_single(
                     print(f"  Warning: Empty {label_key} data for {model_key} model")
 
 
-def _plot_word_importance_naml(word_importance: Dict, save_path: str, top_k: int = 15):
+def _plot_word_importance_naml(word_importance: Dict, save_path, top_k: int = 15):
     """Plot word importance for NAML with separate title and body views."""
+    from pathlib import Path
+
+    # Convert to Path if it's a string
+    save_path = Path(save_path) if isinstance(save_path, str) else save_path
+
     # Plot title attributions
     if "title" in word_importance:
-        title_path = save_path.replace(".png", "_title.png")
+        title_path = save_path.parent / save_path.name.replace(".png", "_title.png")
         _plot_word_importance_single(
-            word_importance["title"], title_path, top_k, view_name="Title"
+            word_importance["title"], str(title_path), top_k, view_name="Title"
         )
 
     # Plot body attributions if available
     if "body" in word_importance:
-        body_path = save_path.replace(".png", "_body.png")
+        body_path = save_path.parent / save_path.name.replace(".png", "_body.png")
         _plot_word_importance_single(
-            word_importance["body"], body_path, top_k, view_name="Body"
+            word_importance["body"], str(body_path), top_k, view_name="Body"
         )
         print(f"Saved NAML word importance plots (title and body) to: {save_path}")
 
@@ -1936,7 +1946,8 @@ def plot_word_frequency_from_top_samples(
     Visualize word frequency from top-k most affected samples.
 
     This plots words ranked by frequency (how often they appear in the most
-    affected samples) separately for positive and negative attributions.
+    affected samples) as primary ranking, then by attribution score as secondary
+    ranking. Words are separated by positive and negative attributions.
 
     Args:
         word_frequency: Dictionary from analyze_word_frequency_from_top_samples
@@ -1992,14 +2003,18 @@ def plot_word_frequency_from_top_samples(
                 ax.set_ylim(-1, 1)
                 continue
 
-            # Get top_k positive words (sorted by frequency)
+            # Get top_k positive words (sorted by frequency first, then attribution)
             sorted_positive = sorted(
-                positive_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+                positive_data.items(),
+                key=lambda x: (x[1]["frequency"], x[1]["mean_attribution"]),
+                reverse=True
             )[:top_k]
 
-            # Get top_k negative words (sorted by frequency)
+            # Get top_k negative words (sorted by frequency first, then attribution magnitude)
             sorted_negative = sorted(
-                negative_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+                negative_data.items(),
+                key=lambda x: (x[1]["frequency"], -x[1]["mean_attribution"]),
+                reverse=True
             )[:top_k]
 
             # Combine them (positive first, then negative)
@@ -2047,8 +2062,8 @@ def plot_word_frequency_from_top_samples(
             ax.set_xlabel(f"Frequency (out of {sample_count} samples)", fontsize=10)
             ax.set_title(
                 f"{model_key.capitalize()} Model - {label_key.capitalize()} News\n"
-                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words by Frequency\n"
-                f"(from all {sample_count} samples, stopwords removed)",
+                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words\n"
+                f"Ranked by frequency, then attribution (from {sample_count} samples, stopwords removed)",
                 fontsize=11,
                 fontweight="bold",
             )
@@ -2139,19 +2154,24 @@ def compare_attributions(
         save_path: Path to save comparison results
         top_k: Number of top positive and negative changes to display
     """
+    # Handle new structure with "title" key (and optionally "body")
+    # Use title importance for the comparison
+    clean_title = clean_importance.get("title", clean_importance)
+    poisoned_title = poisoned_importance.get("title", poisoned_importance)
+
     # Find words that changed importance significantly
     changes = {"real": {}, "fake": {}}
 
     for label in ["real", "fake"]:
-        clean_words = set(clean_importance["clean"][label].keys())
-        poisoned_words = set(poisoned_importance["poisoned"][label].keys())
+        clean_words = set(clean_title["clean"][label].keys())
+        poisoned_words = set(poisoned_title["poisoned"][label].keys())
 
         # Common words
         common = clean_words & poisoned_words
 
         for word in common:
-            clean_score = clean_importance["clean"][label][word]["mean"]
-            poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
+            clean_score = clean_title["clean"][label][word]["mean"]
+            poisoned_score = poisoned_title["poisoned"][label][word]["mean"]
 
             change = poisoned_score - clean_score
             if abs(change) > 0.01:  # Significant change threshold
@@ -2164,11 +2184,11 @@ def compare_attributions(
         # New important words in poisoned
         new_words = poisoned_words - clean_words
         for word in new_words:
-            if poisoned_importance["poisoned"][label][word]["count"] >= 3:
+            if poisoned_title["poisoned"][label][word]["count"] >= 3:
                 changes[label][word] = {
                     "clean": 0.0,
-                    "poisoned": poisoned_importance["poisoned"][label][word]["mean"],
-                    "change": poisoned_importance["poisoned"][label][word]["mean"],
+                    "poisoned": poisoned_title["poisoned"][label][word]["mean"],
+                    "change": poisoned_title["poisoned"][label][word]["mean"],
                 }
 
     # Visualize changes

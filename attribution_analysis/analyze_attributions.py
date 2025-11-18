@@ -63,7 +63,9 @@ def load_config(config_path):
 
 def print_top_words(word_importance, model_name, label, top_k=10):
     """Print top attributed words for a model and label."""
-    words_data = word_importance[model_name][label]
+    # Handle new structure with "title" key (and optionally "body")
+    importance_data = word_importance.get("title", word_importance)
+    words_data = importance_data[model_name][label]
 
     if not words_data:
         print(f"  No data for {model_name} - {label}")
@@ -116,11 +118,14 @@ def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
 
     # Print positive words
     if positive_data:
+        # Sort by frequency first (primary), then by attribution score (secondary)
         sorted_positive = sorted(
-            positive_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            positive_data.items(),
+            key=lambda x: (x[1]["frequency"], x[1]["mean_attribution"]),
+            reverse=True
         )[:top_k]
 
-        print(f"  POSITIVE Attribution Words:")
+        print(f"  POSITIVE Attribution Words (ranked by frequency, then attribution):")
         print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
         print(f"  {'-'*50}")
 
@@ -132,11 +137,15 @@ def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
 
     # Print negative words
     if negative_data:
+        # Sort by frequency first (primary), then by attribution magnitude (secondary)
+        # For negative attributions, use -mean_attribution so more negative comes first
         sorted_negative = sorted(
-            negative_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            negative_data.items(),
+            key=lambda x: (x[1]["frequency"], -x[1]["mean_attribution"]),
+            reverse=True
         )[:top_k]
 
-        print(f"  NEGATIVE Attribution Words:")
+        print(f"  NEGATIVE Attribution Words (ranked by frequency, then attribution):")
         print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
         print(f"  {'-'*50}")
 
@@ -154,13 +163,18 @@ def save_attribution_report(clean_importance, poisoned_importance, output_path):
         "significant_changes": {"real": {}, "fake": {}},
     }
 
+    # Handle new structure with "title" key (and optionally "body")
+    # Use title importance for the report
+    clean_title = clean_importance.get("title", clean_importance)
+    poisoned_title = poisoned_importance.get("title", poisoned_importance)
+
     # Convert to JSON-serializable format
     for model_key, model_name in [
         ("clean", "clean_model"),
         ("poisoned", "poisoned_model"),
     ]:
         importance_dict = (
-            clean_importance if model_key == "clean" else poisoned_importance
+            clean_title if model_key == "clean" else poisoned_title
         )
 
         for label in ["real", "fake"]:
@@ -176,13 +190,13 @@ def save_attribution_report(clean_importance, poisoned_importance, output_path):
 
     # Compute changes
     for label in ["real", "fake"]:
-        clean_words = set(clean_importance["clean"][label].keys())
-        poisoned_words = set(poisoned_importance["poisoned"][label].keys())
+        clean_words = set(clean_title["clean"][label].keys())
+        poisoned_words = set(poisoned_title["poisoned"][label].keys())
         common = clean_words & poisoned_words
 
         for word in common:
-            clean_score = clean_importance["clean"][label][word]["mean"]
-            poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
+            clean_score = clean_title["clean"][label][word]["mean"]
+            poisoned_score = poisoned_title["poisoned"][label][word]["mean"]
             change = poisoned_score - clean_score
 
             if abs(change) > 0.01:  # Significant change
@@ -262,13 +276,18 @@ def analyze_attack_effectiveness(clean_importance, poisoned_importance):
     print("ATTACK EFFECTIVENESS ANALYSIS")
     print("=" * 75)
 
+    # Handle new structure with "title" key (and optionally "body")
+    # Use title importance for the analysis
+    clean_title = clean_importance.get("title", clean_importance)
+    poisoned_title = poisoned_importance.get("title", poisoned_importance)
+
     metrics = {}
 
     for label in ["real", "fake"]:
         print(f"\n{label.upper()} NEWS:")
 
-        clean_words = set(clean_importance["clean"][label].keys())
-        poisoned_words = set(poisoned_importance["poisoned"][label].keys())
+        clean_words = set(clean_title["clean"][label].keys())
+        poisoned_words = set(poisoned_title["poisoned"][label].keys())
 
         # Overlap
         common = clean_words & poisoned_words
@@ -283,8 +302,8 @@ def analyze_attack_effectiveness(clean_importance, poisoned_importance):
         if common:
             changes = []
             for word in common:
-                clean_score = clean_importance["clean"][label][word]["mean"]
-                poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
+                clean_score = clean_title["clean"][label][word]["mean"]
+                poisoned_score = poisoned_title["poisoned"][label][word]["mean"]
                 change = abs(poisoned_score - clean_score)
                 changes.append(change)
 
@@ -304,8 +323,8 @@ def analyze_attack_effectiveness(clean_importance, poisoned_importance):
         # Find words with sign flips
         sign_flips = []
         for word in common:
-            clean_score = clean_importance["clean"][label][word]["mean"]
-            poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
+            clean_score = clean_title["clean"][label][word]["mean"]
+            poisoned_score = poisoned_title["poisoned"][label][word]["mean"]
 
             if (clean_score > 0 and poisoned_score < 0) or (
                 clean_score < 0 and poisoned_score > 0
