@@ -368,7 +368,7 @@ def extract_attributions_for_dataset(
     all_scores = []
     all_predictions = []
 
-    use_glove = "glove" in model_config.model_name.lower()
+    use_glove = "glove" in model_config.model_name.lower() or model_config.architecture.lower() in ["naml", "lstur", "nrms_glove"]
     architecture = model_config.architecture
 
     print(f"Extracting attributions for {n_samples} samples...")
