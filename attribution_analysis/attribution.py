@@ -1008,6 +1008,103 @@ def analyze_word_importance(
     return aggregated
 
 
+def analyze_word_frequency_from_top_samples(
+    attributions_clean: Dict, attributions_poisoned: Dict, top_k_samples: int = 10
+) -> Dict:
+    """
+    Analyze word frequency from top-k most affected samples.
+
+    This is an alternative approach to word importance analysis:
+    1. Score each sample by total attribution magnitude (sum of |positive| + |negative|)
+    2. Rank samples by score (high = most affected, low = unaffected)
+    3. Take top_k samples with highest scores
+    4. Combine all words from those top_k samples
+    5. Rank words by frequency (how often they appear across top_k samples)
+
+    Args:
+        attributions_clean: Attributions from clean model
+        attributions_poisoned: Attributions from poisoned model
+        top_k_samples: Number of top affected samples to analyze
+
+    Returns:
+        Dictionary with word frequency analysis results
+    """
+    results = {
+        "clean": {"real": {}, "fake": {}},
+        "poisoned": {"real": {}, "fake": {}},
+    }
+
+    def process_model_attributions(attributions_dict, model_key):
+        """Process attributions for one model."""
+        # First, score each sample by total attribution magnitude
+        sample_scores = {"real": [], "fake": []}
+        sample_data = {"real": [], "fake": []}
+
+        for attr, words, label in zip(
+            attributions_dict["attributions"],
+            attributions_dict["tokens"],
+            attributions_dict["labels"],
+        ):
+            label_key = "fake" if label == 1 else "real"
+
+            if len(attr) > 0:
+                # Calculate sample score as sum of absolute attributions
+                # This gives us the total "impact" or "affectedness" of the sample
+                positive_score = np.sum(attr[attr > 0])
+                negative_score = np.abs(np.sum(attr[attr < 0]))
+                total_score = positive_score + negative_score
+
+                sample_scores[label_key].append(total_score)
+                sample_data[label_key].append({
+                    "attributions": attr,
+                    "words": words,
+                    "score": total_score
+                })
+
+        # For each label, get top_k most affected samples
+        for label_key in ["real", "fake"]:
+            if not sample_data[label_key]:
+                continue
+
+            # Sort samples by score (descending - highest score = most affected)
+            sorted_samples = sorted(
+                sample_data[label_key],
+                key=lambda x: x["score"],
+                reverse=True
+            )
+
+            # Take top_k samples
+            top_samples = sorted_samples[:top_k_samples]
+
+            # Collect word frequency from top_k samples
+            word_frequency = defaultdict(int)
+            word_attributions = defaultdict(list)  # Store attributions for mean calculation
+
+            for sample in top_samples:
+                attr = sample["attributions"]
+                words = sample["words"]
+
+                # Add all words from this sample (regardless of attribution score)
+                for idx, word in enumerate(words):
+                    if idx < len(attr):
+                        word_frequency[word] += 1
+                        word_attributions[word].append(float(attr[idx]))
+
+            # Store results with frequency and mean attribution
+            for word, freq in word_frequency.items():
+                results[model_key][label_key][word] = {
+                    "frequency": freq,
+                    "mean_attribution": np.mean(word_attributions[word]),
+                    "std_attribution": np.std(word_attributions[word]),
+                    "sample_count": len(top_samples)
+                }
+
+    process_model_attributions(attributions_clean, "clean")
+    process_model_attributions(attributions_poisoned, "poisoned")
+
+    return results
+
+
 def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15):
     """
     Visualize word importance for real vs fake classification.
@@ -1126,6 +1223,143 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
                     print(f"  Warning: No {label_key} data found for {model_key} model")
                 elif not word_importance[model_key][label_key]:
                     print(f"  Warning: Empty {label_key} data for {model_key} model")
+
+
+def plot_word_frequency_from_top_samples(
+    word_frequency: Dict, save_path: str, top_k: int = 15
+):
+    """
+    Visualize word frequency from top-k most affected samples.
+
+    This plots words ranked by frequency (how often they appear in the most
+    affected samples) rather than by attribution score magnitude.
+
+    Args:
+        word_frequency: Dictionary from analyze_word_frequency_from_top_samples
+        save_path: Path to save the plot
+        top_k: Number of top words to display
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+
+    # Plot for each model and label combination
+    for i, model_key in enumerate(["clean", "poisoned"]):
+        for j, label_key in enumerate(["real", "fake"]):
+            ax = axes[i, j]
+
+            # Check if model data exists
+            if model_key not in word_frequency:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"No {model_key} model data",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Check if label data exists
+            if label_key not in word_frequency[model_key]:
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"No {label_key} data",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Get words ranked by frequency
+            words_data = word_frequency[model_key][label_key]
+            if not words_data:
+                ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Sort by frequency (descending)
+            sorted_words = sorted(
+                words_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            )[:top_k]
+
+            if not sorted_words:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No significant words",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                )
+                ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
+                ax.set_xlim(-1, 1)
+                ax.set_ylim(-1, 1)
+                continue
+
+            # Extract data
+            words = [item[0] for item in sorted_words]
+            frequencies = [item[1]["frequency"] for item in sorted_words]
+            mean_attrs = [item[1]["mean_attribution"] for item in sorted_words]
+            sample_count = sorted_words[0][1]["sample_count"] if sorted_words else 0
+
+            # Create bar plot with dual information
+            # Primary: frequency (bar height)
+            # Secondary: mean attribution (color intensity)
+
+            # Normalize mean attributions for color mapping
+            max_abs_attr = max([abs(a) for a in mean_attrs]) if mean_attrs else 1
+            normalized_attrs = [a / max_abs_attr if max_abs_attr > 0 else 0 for a in mean_attrs]
+
+            # Color by attribution (green for positive, red for negative)
+            colors = []
+            for norm_attr in normalized_attrs:
+                if norm_attr > 0:
+                    colors.append((0, norm_attr, 0, 0.7))  # Green with varying intensity
+                else:
+                    colors.append((-norm_attr, 0, 0, 0.7))  # Red with varying intensity
+
+            bars = ax.barh(range(len(words)), frequencies, color=colors)
+
+            # Add frequency labels on bars
+            for idx, (bar, freq, attr) in enumerate(zip(bars, frequencies, mean_attrs)):
+                width = bar.get_width()
+                ax.text(
+                    width + 0.5,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{freq} ({attr:+.3f})",
+                    va="center",
+                    fontsize=8,
+                )
+
+            ax.set_yticks(range(len(words)))
+            ax.set_yticklabels(words, fontsize=9)
+            ax.set_xlabel(
+                f"Frequency (out of {sample_count} most affected samples)", fontsize=10
+            )
+            ax.set_title(
+                f"{model_key.capitalize()} Model - {label_key.capitalize()} News\n"
+                f"Words from Top-{sample_count} Most Affected Samples",
+                fontsize=12,
+                fontweight="bold",
+            )
+            ax.grid(axis="x", alpha=0.3)
+
+            # Invert y-axis so most frequent is on top
+            ax.invert_yaxis()
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved word frequency plot to: {save_path}")
 
 
 def plot_attribution_heatmap(attributions: Dict, save_path: str, n_samples: int = 10):

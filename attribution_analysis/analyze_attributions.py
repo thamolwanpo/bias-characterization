@@ -49,6 +49,8 @@ from attribution import (
     plot_word_importance,
     plot_attribution_heatmap,
     compare_attributions,
+    analyze_word_frequency_from_top_samples,
+    plot_word_frequency_from_top_samples,
 )
 
 
@@ -86,6 +88,34 @@ def print_top_words(word_importance, model_name, label, top_k=10):
 
     for word, stats in sorted_words:
         print(f"  {word:<20} {stats['mean']:>10.4f}     {stats['count']:>5}")
+
+
+def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
+    """Print top frequent words from top affected samples."""
+    words_data = word_frequency[model_name][label]
+
+    if not words_data:
+        print(f"  No data for {model_name} - {label}")
+        return
+
+    # Sort by frequency (descending)
+    sorted_words = sorted(
+        words_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+    )[:top_k]
+
+    sample_count = sorted_words[0][1]["sample_count"] if sorted_words else 0
+
+    print(
+        f"\n  Top {top_k} frequent words for {model_name.upper()} model - {label.upper()} news"
+    )
+    print(f"  (from top-{sample_count} most affected samples)")
+    print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
+    print(f"  {'-'*50}")
+
+    for word, stats in sorted_words:
+        print(
+            f"  {word:<20} {stats['frequency']:>5}/{sample_count:<5} {stats['mean_attribution']:>10.4f}"
+        )
 
 
 def save_attribution_report(clean_importance, poisoned_importance, output_path):
@@ -142,6 +172,42 @@ def save_attribution_report(clean_importance, poisoned_importance, output_path):
         json.dump(report, f, indent=2)
 
     print(f"\nSaved attribution report to: {output_path}")
+
+
+def save_frequency_report(word_frequency, output_path):
+    """Save word frequency analysis report from top affected samples."""
+    report = {
+        "clean_model": {},
+        "poisoned_model": {},
+        "methodology": {
+            "description": "Words ranked by frequency in top-k most affected samples",
+            "sample_scoring": "Total attribution magnitude (sum of |positive| + |negative|)",
+            "ranking_metric": "Frequency (how often word appears across top-k samples)",
+        },
+    }
+
+    # Convert to JSON-serializable format
+    for model_key, model_name in [
+        ("clean", "clean_model"),
+        ("poisoned", "poisoned_model"),
+    ]:
+        for label in ["real", "fake"]:
+            words_data = word_frequency[model_key][label]
+            report[model_name][label] = {
+                word: {
+                    "frequency": int(stats["frequency"]),
+                    "mean_attribution": float(stats["mean_attribution"]),
+                    "std_attribution": float(stats["std_attribution"]),
+                    "sample_count": int(stats["sample_count"]),
+                }
+                for word, stats in words_data.items()
+            }
+
+    # Save report
+    with open(output_path, "w") as f:
+        json.dump(report, f, indent=2)
+
+    print(f"Saved frequency analysis report to: {output_path}")
 
 
 def analyze_attack_effectiveness(clean_importance, poisoned_importance):
@@ -249,6 +315,12 @@ def main():
         default=15,
         help="Number of top words to display (default: 15)",
     )
+    parser.add_argument(
+        "--top_k_samples",
+        type=int,
+        default=10,
+        help="Number of top affected samples for frequency analysis (default: 10)",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -353,6 +425,29 @@ def main():
         for label in ["real", "fake"]:
             print_top_words(word_importance, model_name, label, top_k=args.top_k)
 
+    # NEW: Analyze word frequency from top affected samples
+    print(f"\n{'='*75}")
+    print("ANALYZING WORD FREQUENCY FROM TOP AFFECTED SAMPLES")
+    print(f"{'='*75}")
+    print(f"This analysis identifies the top {args.top_k_samples} most affected samples")
+    print(f"(ranked by total attribution magnitude) and analyzes word frequency")
+    print(f"within those samples.")
+
+    word_frequency = analyze_word_frequency_from_top_samples(
+        attributions_clean, attributions_poisoned, top_k_samples=args.top_k_samples
+    )
+
+    # Print top frequent words from top samples
+    print(f"\n{'='*75}")
+    print(f"TOP FREQUENT WORDS FROM TOP-{args.top_k_samples} AFFECTED SAMPLES")
+    print(f"{'='*75}")
+
+    for model_name in ["clean", "poisoned"]:
+        for label in ["real", "fake"]:
+            print_top_frequent_words(
+                word_frequency, model_name, label, top_k=args.top_k
+            )
+
     # Analyze attack effectiveness
     attack_metrics = analyze_attack_effectiveness(
         word_importance, word_importance  # Using combined importance dict
@@ -390,6 +485,13 @@ def main():
         word_importance, word_importance, viz_dir / "attribution_comparison.png", top_k=args.top_k
     )
 
+    print(f"5. Word frequency from top-{args.top_k_samples} affected samples...")
+    plot_word_frequency_from_top_samples(
+        word_frequency,
+        viz_dir / "word_frequency_top_samples.png",
+        top_k=args.top_k,
+    )
+
     # Save detailed report
     print(f"\n{'='*75}")
     print("SAVING RESULTS")
@@ -397,6 +499,9 @@ def main():
 
     report_path = output_dir / "attribution_report.json"
     save_attribution_report(word_importance, word_importance, report_path)
+
+    frequency_report_path = output_dir / "word_frequency_report.json"
+    save_frequency_report(word_frequency, frequency_report_path)
 
     # Save raw attributions (optional)
     # Note: attributions and tokens/words have variable lengths after word grouping
@@ -427,6 +532,7 @@ def main():
     print(f"Results saved to: {output_dir}")
     print(f"  - Visualizations: {viz_dir}")
     print(f"  - Attribution report: {report_path}")
+    print(f"  - Frequency analysis report: {frequency_report_path}")
     print(f"  - Raw data: {output_dir}/attributions_*.npz")
 
     print("\n" + "=" * 75)
