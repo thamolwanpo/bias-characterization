@@ -1777,13 +1777,18 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
         save_path: Path to save the plot
         top_k: Number of top words to display
     """
-    # Check if this is NAML format (has "title" and optionally "body" keys)
-    # or NRMS format (has "clean" and "poisoned" keys directly)
-    if "title" in word_importance:
-        # NAML format - plot title and body separately
+    # Check if this is NAML format (has both "title" and "body" keys)
+    # or NRMS format (has only "title" key or "clean"/"poisoned" keys directly)
+    if "body" in word_importance:
+        # NAML format - has both title and body, plot separately
         _plot_word_importance_naml(word_importance, save_path, top_k)
+    elif "title" in word_importance:
+        # NRMS format with new structure - has only "title" key
+        _plot_word_importance_single(
+            word_importance["title"], save_path, top_k, view_name="Title"
+        )
     else:
-        # NRMS format - plot title only
+        # NRMS format with old structure - has "clean"/"poisoned" keys directly
         _plot_word_importance_single(
             word_importance, save_path, top_k, view_name="Title"
         )
@@ -1911,20 +1916,25 @@ def _plot_word_importance_single(
                     print(f"  Warning: Empty {label_key} data for {model_key} model")
 
 
-def _plot_word_importance_naml(word_importance: Dict, save_path: str, top_k: int = 15):
+def _plot_word_importance_naml(word_importance: Dict, save_path, top_k: int = 15):
     """Plot word importance for NAML with separate title and body views."""
+    from pathlib import Path
+
+    # Convert to Path if it's a string
+    save_path = Path(save_path) if isinstance(save_path, str) else save_path
+
     # Plot title attributions
     if "title" in word_importance:
-        title_path = save_path.replace(".png", "_title.png")
+        title_path = save_path.parent / save_path.name.replace(".png", "_title.png")
         _plot_word_importance_single(
-            word_importance["title"], title_path, top_k, view_name="Title"
+            word_importance["title"], str(title_path), top_k, view_name="Title"
         )
 
     # Plot body attributions if available
     if "body" in word_importance:
-        body_path = save_path.replace(".png", "_body.png")
+        body_path = save_path.parent / save_path.name.replace(".png", "_body.png")
         _plot_word_importance_single(
-            word_importance["body"], body_path, top_k, view_name="Body"
+            word_importance["body"], str(body_path), top_k, view_name="Body"
         )
         print(f"Saved NAML word importance plots (title and body) to: {save_path}")
 
