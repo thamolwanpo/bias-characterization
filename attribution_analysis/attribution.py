@@ -7,6 +7,13 @@ for real vs fake news classification on both clean and poisoned models.
 Reference: Axiomatic Attribution for Deep Networks (Sundararajan et al., 2017)
 https://arxiv.org/abs/1703.01365
 
+Supported Architectures:
+- NRMS: Title-only attribution analysis
+- NAML: Multi-view attribution analysis (title + body text)
+  * Separate attributions computed for title and body views
+  * Handles NAML's multi-view encoder architecture
+  * Can analyze both views independently
+
 Word-Level Attributions:
 - Token-level attributions are grouped into word-level attributions
 - Subword tokens (BERT ##, RoBERTa Ġ) are merged into complete words
@@ -24,6 +31,7 @@ Expected Performance:
 - GPU utilization: 3-5GB+ (up from 1.5GB)
 - Speed: ~2-4 hours for 40k samples (down from 45+ hours)
 - Batch size: Configurable via DataLoader (default from model config)
+- NAML: ~2x slower than NRMS due to dual attribution computation (title + body)
 """
 
 import torch
@@ -389,6 +397,284 @@ def group_tokens_to_words(
     return words, np.array(word_attributions)
 
 
+def compute_attributions_transformer_naml(
+    model,
+    candidate_title_ids: torch.Tensor,
+    candidate_title_mask: torch.Tensor,
+    candidate_body_ids: torch.Tensor,
+    candidate_body_mask: torch.Tensor,
+    history_title_ids: torch.Tensor,
+    history_title_mask: torch.Tensor,
+    history_body_ids: torch.Tensor,
+    history_body_mask: torch.Tensor,
+    target_candidate_idx: int = 0,
+    n_steps: int = 50,
+    user_emb_cache: Optional[torch.Tensor] = None,
+    attribution_target: str = "title",  # "title" or "body"
+) -> torch.Tensor:
+    """
+    Compute attributions for NAML transformer-based models.
+
+    NAML uses multi-view learning with separate encoders for title and body.
+    This function computes attributions for either title or body text.
+
+    Args:
+        model: Full NAML recommendation model
+        candidate_title_ids: Candidate title token IDs [batch_size, n_candidates, seq_len]
+        candidate_title_mask: Candidate title attention mask [batch_size, n_candidates, seq_len]
+        candidate_body_ids: Candidate body token IDs [batch_size, n_candidates, seq_len]
+        candidate_body_mask: Candidate body attention mask [batch_size, n_candidates, seq_len]
+        history_title_ids: History title token IDs [batch_size, history_len, seq_len]
+        history_title_mask: History title attention mask [batch_size, history_len, seq_len]
+        history_body_ids: History body token IDs [batch_size, history_len, seq_len]
+        history_body_mask: History body attention mask [batch_size, history_len, seq_len]
+        target_candidate_idx: Which candidate to compute attributions for
+        n_steps: Number of integration steps
+        user_emb_cache: Pre-computed user embeddings [batch_size, embed_dim] (optional)
+        attribution_target: Which view to compute attributions for ("title" or "body")
+
+    Returns:
+        attributions: Attribution scores [batch_size, seq_len]
+    """
+    device = candidate_title_ids.device
+    news_encoder = model.news_encoder
+    user_encoder = model.user_encoder
+
+    # Get the embedding layer for the target view
+    embedding_layer = None
+
+    if hasattr(news_encoder, "text_encoders"):
+        # NAML has separate text encoders for title and body
+        if attribution_target == "title" and "title" in news_encoder.text_encoders:
+            text_encoder = news_encoder.text_encoders["title"]
+        elif attribution_target == "body" and "text" in news_encoder.text_encoders:
+            text_encoder = news_encoder.text_encoders["text"]
+        else:
+            raise ValueError(f"Cannot find {attribution_target} encoder in NAML model")
+
+        # Get embedding layer from text encoder
+        if hasattr(text_encoder, "bert"):
+            embedding_layer = text_encoder.bert.embeddings
+        elif hasattr(text_encoder, "lm"):
+            embedding_layer = text_encoder.lm.embeddings
+
+    if embedding_layer is None:
+        raise ValueError(
+            f"Cannot find embedding layer for {attribution_target} in NAML model"
+        )
+
+    batch_size, num_candidates, seq_len = candidate_title_ids.shape
+
+    # Select which inputs to use based on attribution target
+    if attribution_target == "title":
+        target_ids = candidate_title_ids[:, target_candidate_idx, :]
+        target_mask = candidate_title_mask[:, target_candidate_idx, :]
+    else:  # body
+        target_ids = candidate_body_ids[:, target_candidate_idx, :]
+        target_mask = candidate_body_mask[:, target_candidate_idx, :]
+
+    baseline_ids = torch.zeros_like(target_ids)  # PAD tokens
+
+    with torch.no_grad():
+        # Get embeddings
+        input_embeddings = embedding_layer(target_ids)
+        baseline_embeddings = embedding_layer(baseline_ids)
+
+        # Compute or use cached user embeddings
+        if user_emb_cache is None:
+            history_len = history_title_ids.shape[1]
+            _, _, title_seq_len = history_title_ids.shape
+            _, _, body_seq_len = history_body_ids.shape
+
+            # Encode history using NAML's multi-view encoding
+            history_embs = encode_naml_news_batch(
+                news_encoder,
+                history_title_ids.view(batch_size * history_len, title_seq_len),
+                history_title_mask.view(batch_size * history_len, title_seq_len),
+                history_body_ids.view(batch_size * history_len, body_seq_len),
+                history_body_mask.view(batch_size * history_len, body_seq_len),
+            ).view(batch_size, history_len, -1)
+
+            user_emb = user_encoder(history_embs)
+        else:
+            user_emb = user_emb_cache
+
+    # Accumulate gradients
+    accumulated_grads = torch.zeros_like(input_embeddings)
+
+    for step in range(n_steps):
+        alpha = (step + 1) / n_steps
+        interpolated = baseline_embeddings + alpha * (input_embeddings - baseline_embeddings)
+        interpolated.requires_grad_(True)
+
+        # Encode candidate using NAML with interpolated embeddings for target view
+        if attribution_target == "title":
+            candidate_emb = encode_naml_news_from_embeddings(
+                news_encoder,
+                title_embeddings=interpolated,
+                title_mask=target_mask,
+                body_ids=candidate_body_ids[:, target_candidate_idx, :],
+                body_mask=candidate_body_mask[:, target_candidate_idx, :],
+            )
+        else:  # body
+            candidate_emb = encode_naml_news_from_embeddings(
+                news_encoder,
+                title_ids=candidate_title_ids[:, target_candidate_idx, :],
+                title_mask=candidate_title_mask[:, target_candidate_idx, :],
+                body_embeddings=interpolated,
+                body_mask=target_mask,
+            )
+
+        # Compute score
+        score = torch.sum(candidate_emb * user_emb, dim=-1)
+
+        # Backward pass
+        score.sum().backward()
+
+        # Accumulate gradients
+        if interpolated.grad is not None:
+            accumulated_grads += interpolated.grad
+            interpolated.grad = None
+
+    # Average and multiply by difference
+    avg_grads = accumulated_grads / n_steps
+    attributions = avg_grads * (input_embeddings - baseline_embeddings)
+
+    # Sum over embedding dimension
+    token_attributions = attributions.sum(dim=-1)
+
+    return token_attributions
+
+
+def encode_naml_news_batch(
+    news_encoder, title_ids, title_mask, body_ids, body_mask
+):
+    """Encode news using NAML's multi-view architecture from token IDs."""
+    return news_encoder(
+        title_input_ids=title_ids,
+        title_attention_mask=title_mask,
+        body_input_ids=body_ids,
+        body_attention_mask=body_mask,
+    )
+
+
+def encode_naml_news_from_embeddings(
+    news_encoder,
+    title_ids=None,
+    title_embeddings=None,
+    title_mask=None,
+    body_ids=None,
+    body_embeddings=None,
+    body_mask=None,
+):
+    """
+    Encode news using NAML with embeddings for one view and IDs for the other.
+
+    This allows us to compute gradients for one view while keeping the other fixed.
+    """
+    # Get text encoders
+    title_encoder = news_encoder.text_encoders.get("title")
+    body_encoder = news_encoder.text_encoders.get("text")
+
+    # Encode title view
+    if title_embeddings is not None:
+        # Use interpolated embeddings for title
+        title_emb = encode_text_from_embeddings(title_encoder, title_embeddings, title_mask)
+    elif title_ids is not None:
+        # Use normal encoding for title
+        title_emb = title_encoder(
+            torch.stack([title_ids, title_mask], dim=1) if title_ids.dim() == 2 else title_ids
+        )
+    else:
+        raise ValueError("Either title_ids or title_embeddings must be provided")
+
+    # Encode body view
+    if body_embeddings is not None:
+        # Use interpolated embeddings for body
+        body_emb = encode_text_from_embeddings(body_encoder, body_embeddings, body_mask)
+    elif body_ids is not None:
+        # Use normal encoding for body
+        body_emb = body_encoder(
+            torch.stack([body_ids, body_mask], dim=1) if body_ids.dim() == 2 else body_ids
+        )
+    else:
+        raise ValueError("Either body_ids or body_embeddings must be provided")
+
+    # Combine views using NAML's multi-view attention
+    if hasattr(news_encoder, "final_attention") and news_encoder.final_attention is not None:
+        # Stack views and apply attention
+        stacked_views = torch.stack([title_emb, body_emb], dim=1)  # [batch, 2, dim]
+        news_emb, _ = news_encoder.final_attention(stacked_views)
+    else:
+        # Simple averaging if only one view
+        news_emb = (title_emb + body_emb) / 2
+
+    return news_emb
+
+
+def encode_text_from_embeddings(text_encoder, embeddings, attention_mask):
+    """Encode text from embeddings through a NAML text encoder."""
+    # Get transformer backend
+    if hasattr(text_encoder, "bert"):
+        transformer = text_encoder.bert
+        encoder = transformer.encoder
+    elif hasattr(text_encoder, "lm"):
+        transformer = text_encoder.lm
+        encoder = transformer.encoder
+    else:
+        raise ValueError("Cannot find transformer in text encoder")
+
+    # Create extended attention mask
+    batch_size, seq_length = attention_mask.shape
+    extended_attention_mask = attention_mask[:, None, None, :]
+    extended_attention_mask = extended_attention_mask.to(dtype=embeddings.dtype)
+    extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(embeddings.dtype).min
+
+    # Pass through encoder
+    encoder_output = encoder(embeddings, attention_mask=extended_attention_mask)
+
+    if hasattr(encoder_output, "last_hidden_state"):
+        sequence_output = encoder_output.last_hidden_state
+    elif isinstance(encoder_output, tuple):
+        sequence_output = encoder_output[0]
+    else:
+        sequence_output = encoder_output
+
+    # Apply final layers (CNN + attention in NAML)
+    if hasattr(text_encoder, "CNN"):
+        # NAML's BERTTextEncoder uses pooler then CNN
+        if hasattr(text_encoder, "pooler"):
+            cls_token = sequence_output[:, 0]  # [batch, hidden_dim]
+            pooled = text_encoder.pooler(cls_token)
+            # CNN expects [batch, 1, 1, dim]
+            convoluted = text_encoder.CNN(pooled.unsqueeze(1).unsqueeze(2).float()).squeeze(dim=3)
+        else:
+            # Fallback: apply CNN directly
+            convoluted = text_encoder.CNN(sequence_output.unsqueeze(1)).squeeze(dim=3)
+
+        # Apply activation and dropout
+        import torch.nn.functional as F
+        activated = F.dropout(
+            F.relu(convoluted),
+            p=text_encoder.dropout_probability,
+            training=text_encoder.training
+        )
+
+        # Apply additive attention
+        if hasattr(text_encoder, "additive_attention"):
+            text_emb, _ = text_encoder.additive_attention(activated.transpose(1, 2))
+        else:
+            text_emb = activated.mean(dim=1)
+    elif hasattr(text_encoder, "additive_attention"):
+        # Apply additive attention directly
+        text_emb, _ = text_encoder.additive_attention(sequence_output)
+    else:
+        # Use CLS token
+        text_emb = sequence_output[:, 0, :]
+
+    return text_emb
+
+
 def extract_attributions_for_dataset(
     data_loader, config: Dict, model_config, n_samples: int = 100, n_steps: int = 50
 ) -> Dict:
@@ -431,12 +717,19 @@ def extract_attributions_for_dataset(
     all_scores = []
     all_predictions = []
 
+    # Additional storage for NAML body attributions
+    all_body_attributions = []
+    all_body_tokens = []
+
     use_glove = "glove" in model_config.model_name.lower()
     architecture = model_config.architecture
+    is_naml = architecture == "naml"
 
     print(f"Extracting attributions for {n_samples} samples...")
     print(f"  Model type: {'GloVe' if use_glove else 'Transformer'}")
     print(f"  Architecture: {architecture}")
+    if is_naml:
+        print(f"  NAML: Extracting attributions for both title and body")
 
     sample_count = 0
     for batch in tqdm(data_loader, desc="Processing batches"):
@@ -537,22 +830,49 @@ def extract_attributions_for_dataset(
                     :effective_batch_size
                 ].to(device)
 
+                # NAML: also get body text
+                if is_naml:
+                    candidate_body_ids = batch["candidate_input_ids"][
+                        :effective_batch_size
+                    ].to(device)
+                    candidate_body_mask = batch["candidate_attention_mask"][
+                        :effective_batch_size
+                    ].to(device)
+                    history_body_ids = batch["history_input_ids"][
+                        :effective_batch_size
+                    ].to(device)
+                    history_body_mask = batch["history_attention_mask"][
+                        :effective_batch_size
+                    ].to(device)
+
                 # Pre-compute user embeddings once for the entire batch (caching)
                 with torch.no_grad():
                     batch_size_actual = candidate_title_ids.shape[0]
                     history_len = history_title_ids.shape[1]
                     seq_len = history_title_ids.shape[2]
 
-                    history_flat_ids = history_title_ids.view(
-                        batch_size_actual * history_len, seq_len
-                    )
-                    history_flat_mask = history_title_mask.view(
-                        batch_size_actual * history_len, seq_len
-                    )
+                    if is_naml:
+                        # NAML: encode history with both title and body
+                        body_seq_len = history_body_ids.shape[2]
+                        history_embs = encode_naml_news_batch(
+                            model.news_encoder,
+                            history_title_ids.view(batch_size_actual * history_len, seq_len),
+                            history_title_mask.view(batch_size_actual * history_len, seq_len),
+                            history_body_ids.view(batch_size_actual * history_len, body_seq_len),
+                            history_body_mask.view(batch_size_actual * history_len, body_seq_len),
+                        ).view(batch_size_actual, history_len, -1)
+                    else:
+                        # NRMS: encode history with title only
+                        history_flat_ids = history_title_ids.view(
+                            batch_size_actual * history_len, seq_len
+                        )
+                        history_flat_mask = history_title_mask.view(
+                            batch_size_actual * history_len, seq_len
+                        )
 
-                    history_embs = encode_transformer_news(
-                        model.news_encoder, history_flat_ids, history_flat_mask
-                    ).view(batch_size_actual, history_len, -1)
+                        history_embs = encode_transformer_news(
+                            model.news_encoder, history_flat_ids, history_flat_mask
+                        ).view(batch_size_actual, history_len, -1)
 
                     user_embs = model.user_encoder(
                         history_embs
@@ -560,16 +880,53 @@ def extract_attributions_for_dataset(
 
                 # Compute attributions for entire batch at once
                 with torch.enable_grad():
-                    attributions_batch = compute_attributions_transformer(
-                        model,
-                        candidate_title_ids,
-                        candidate_title_mask,
-                        history_title_ids,
-                        history_title_mask,
-                        target_candidate_idx=0,
-                        n_steps=n_steps,
-                        user_emb_cache=user_embs,  # Pass cached user embeddings
-                    )  # [batch_size, seq_len]
+                    if is_naml:
+                        # NAML: compute attributions for both title and body
+                        # Title attributions
+                        title_attributions_batch = compute_attributions_transformer_naml(
+                            model,
+                            candidate_title_ids,
+                            candidate_title_mask,
+                            candidate_body_ids,
+                            candidate_body_mask,
+                            history_title_ids,
+                            history_title_mask,
+                            history_body_ids,
+                            history_body_mask,
+                            target_candidate_idx=0,
+                            n_steps=n_steps,
+                            user_emb_cache=user_embs,
+                            attribution_target="title",
+                        )  # [batch_size, seq_len]
+
+                        # Body attributions
+                        body_attributions_batch = compute_attributions_transformer_naml(
+                            model,
+                            candidate_title_ids,
+                            candidate_title_mask,
+                            candidate_body_ids,
+                            candidate_body_mask,
+                            history_title_ids,
+                            history_title_mask,
+                            history_body_ids,
+                            history_body_mask,
+                            target_candidate_idx=0,
+                            n_steps=n_steps,
+                            user_emb_cache=user_embs,
+                            attribution_target="body",
+                        )  # [batch_size, seq_len]
+                    else:
+                        # NRMS: compute attributions for title only
+                        title_attributions_batch = compute_attributions_transformer(
+                            model,
+                            candidate_title_ids,
+                            candidate_title_mask,
+                            history_title_ids,
+                            history_title_mask,
+                            target_candidate_idx=0,
+                            n_steps=n_steps,
+                            user_emb_cache=user_embs,  # Pass cached user embeddings
+                        )  # [batch_size, seq_len]
 
                 # Get prediction scores for entire batch
                 with torch.no_grad():
@@ -579,6 +936,12 @@ def extract_attributions_for_dataset(
                         "history_title_input_ids": history_title_ids,
                         "history_title_attention_mask": history_title_mask,
                     }
+                    if is_naml:
+                        batch_dict["candidate_input_ids"] = candidate_body_ids
+                        batch_dict["candidate_attention_mask"] = candidate_body_mask
+                        batch_dict["history_input_ids"] = history_body_ids
+                        batch_dict["history_attention_mask"] = history_body_mask
+
                     scores_batch = model(batch_dict)  # [batch_size, n_candidates]
                     predictions_batch = scores_batch.argmax(dim=1)  # [batch_size]
                     scores_batch_first = scores_batch[
@@ -592,18 +955,28 @@ def extract_attributions_for_dataset(
 
                 # Store results for each sample in batch
                 for i in range(batch_size_actual):
-                    # Get first candidate tokens
-                    input_ids = candidate_title_ids[i, 0, :]
-                    tokens = tokenizer.convert_ids_to_tokens(input_ids.cpu().numpy())
-
-                    # Get attributions for this sample
-                    attributions = attributions_batch[i].cpu().numpy()  # [seq_len]
+                    # Title: Get first candidate tokens and attributions
+                    title_input_ids = candidate_title_ids[i, 0, :]
+                    title_tokens = tokenizer.convert_ids_to_tokens(title_input_ids.cpu().numpy())
+                    title_attributions = title_attributions_batch[i].cpu().numpy()  # [seq_len]
 
                     # Group tokens into words and average attributions
-                    words, word_attrs = group_tokens_to_words(tokens, attributions)
+                    title_words, title_word_attrs = group_tokens_to_words(title_tokens, title_attributions)
 
-                    all_tokens.append(words)
-                    all_attributions.append(word_attrs)
+                    all_tokens.append(title_words)
+                    all_attributions.append(title_word_attrs)
+
+                    # Body: For NAML, also process body attributions
+                    if is_naml:
+                        body_input_ids = candidate_body_ids[i, 0, :]
+                        body_tokens = tokenizer.convert_ids_to_tokens(body_input_ids.cpu().numpy())
+                        body_attributions = body_attributions_batch[i].cpu().numpy()  # [seq_len]
+
+                        # Group tokens into words and average attributions
+                        body_words, body_word_attrs = group_tokens_to_words(body_tokens, body_attributions)
+
+                        all_body_tokens.append(body_words)
+                        all_body_attributions.append(body_word_attrs)
 
                     # Get prediction and score
                     all_predictions.append(predictions_batch[i].item())
@@ -621,6 +994,9 @@ def extract_attributions_for_dataset(
             for i in range(effective_batch_size):
                 all_attributions.append(np.zeros(10))
                 all_tokens.append(["[ERROR]"] * 10)
+                if is_naml:
+                    all_body_attributions.append(np.zeros(10))
+                    all_body_tokens.append(["[ERROR]"] * 10)
                 all_predictions.append(0)
                 all_scores.append(0.0)
 
@@ -635,6 +1011,9 @@ def extract_attributions_for_dataset(
                 )
 
     print(f"\nExtracted attributions for {len(all_attributions)} samples")
+    if is_naml:
+        print(f"  Title attributions: {len(all_attributions)} samples")
+        print(f"  Body attributions: {len(all_body_attributions)} samples")
 
     # Final cleanup
     if device != "cpu" and torch.cuda.is_available():
@@ -643,13 +1022,20 @@ def extract_attributions_for_dataset(
             f"Final GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
         )
 
-    return {
+    result = {
         "attributions": all_attributions,
         "tokens": all_tokens,
         "labels": np.array(all_labels[: len(all_attributions)]),
         "scores": np.array(all_scores),
         "predictions": np.array(all_predictions),
     }
+
+    # Add body attributions for NAML
+    if is_naml:
+        result["body_attributions"] = all_body_attributions
+        result["body_tokens"] = all_body_tokens
+
+    return result
 
 
 def compute_attributions_glove(
@@ -1039,7 +1425,8 @@ def encode_transformer_news_from_embeddings(news_encoder, embeddings, attention_
 
 
 def analyze_word_importance(
-    attributions_clean: Dict, attributions_poisoned: Dict, top_k: int = 20
+    attributions_clean: Dict, attributions_poisoned: Dict, top_k: int = 20,
+    process_body: bool = False
 ) -> Dict:
     """
     Analyze which words are most important for real vs fake classification.
@@ -1048,9 +1435,49 @@ def analyze_word_importance(
         attributions_clean: Attributions from clean model
         attributions_poisoned: Attributions from poisoned model
         top_k: Number of top words to analyze
+        process_body: If True and body attributions available (NAML), process body text
 
     Returns:
-        Dictionary with analysis results
+        Dictionary with analysis results (title and optionally body)
+    """
+    # Determine if we should process body
+    has_body = "body_attributions" in attributions_clean and "body_attributions" in attributions_poisoned
+
+    # Process title attributions (always)
+    title_results = _process_attributions_for_importance(
+        attributions_clean, attributions_poisoned,
+        attr_key="attributions", token_key="tokens", top_k=top_k
+    )
+
+    result = {"title": title_results}
+
+    # Process body attributions if available and requested
+    if has_body and process_body:
+        body_results = _process_attributions_for_importance(
+            attributions_clean, attributions_poisoned,
+            attr_key="body_attributions", token_key="body_tokens", top_k=top_k
+        )
+        result["body"] = body_results
+
+    return result
+
+
+def _process_attributions_for_importance(
+    attributions_clean: Dict, attributions_poisoned: Dict,
+    attr_key: str = "attributions", token_key: str = "tokens", top_k: int = 20
+) -> Dict:
+    """
+    Internal function to process attributions for importance analysis.
+
+    Args:
+        attributions_clean: Attributions from clean model
+        attributions_poisoned: Attributions from poisoned model
+        attr_key: Key for attributions (e.g., "attributions" or "body_attributions")
+        token_key: Key for tokens (e.g., "tokens" or "body_tokens")
+        top_k: Number of top words to analyze
+
+    Returns:
+        Dictionary with aggregated word importance
     """
     results = {
         "clean": {"real": defaultdict(list), "fake": defaultdict(list)},
@@ -1060,10 +1487,8 @@ def analyze_word_importance(
     def process_model_attributions(attributions_dict, model_key):
         """Process attributions for one model."""
         for attr, words, label in zip(
-            attributions_dict["attributions"],
-            attributions_dict[
-                "tokens"
-            ],  # Note: key is still "tokens" but contains words after grouping
+            attributions_dict[attr_key],
+            attributions_dict[token_key],
             attributions_dict["labels"],
         ):
             label_key = "fake" if label == 1 else "real"
@@ -1295,11 +1720,25 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
     """
     Visualize word importance for real vs fake classification.
 
+    Handles both NRMS (title only) and NAML (title + body) formats.
+
     Args:
         word_importance: Dictionary from analyze_word_importance
         save_path: Path to save the plot
         top_k: Number of top words to display
     """
+    # Check if this is NAML format (has "title" and optionally "body" keys)
+    # or NRMS format (has "clean" and "poisoned" keys directly)
+    if "title" in word_importance:
+        # NAML format - plot title and body separately
+        _plot_word_importance_naml(word_importance, save_path, top_k)
+    else:
+        # NRMS format - plot title only
+        _plot_word_importance_single(word_importance, save_path, top_k, view_name="Title")
+
+
+def _plot_word_importance_single(word_importance: Dict, save_path: str, top_k: int = 15, view_name: str = ""):
+    """Plot word importance for a single view (title or body)."""
     fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
     # Plot for each model and label combination
@@ -1389,8 +1828,9 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
             ax.set_yticks(range(len(words)))
             ax.set_yticklabels(words, fontsize=9)
             ax.set_xlabel("Attribution Score", fontsize=10)
+            title_suffix = f" ({view_name})" if view_name else ""
             ax.set_title(
-                f"{model_key.capitalize()} Model - {label_key.capitalize()} News",
+                f"{model_key.capitalize()} Model - {label_key.capitalize()} News{title_suffix}",
                 fontsize=12,
                 fontweight="bold",
             )
@@ -1415,6 +1855,20 @@ def plot_word_importance(word_importance: Dict, save_path: str, top_k: int = 15)
                     print(f"  Warning: No {label_key} data found for {model_key} model")
                 elif not word_importance[model_key][label_key]:
                     print(f"  Warning: Empty {label_key} data for {model_key} model")
+
+
+def _plot_word_importance_naml(word_importance: Dict, save_path: str, top_k: int = 15):
+    """Plot word importance for NAML with separate title and body views."""
+    # Plot title attributions
+    if "title" in word_importance:
+        title_path = save_path.replace(".png", "_title.png")
+        _plot_word_importance_single(word_importance["title"], title_path, top_k, view_name="Title")
+
+    # Plot body attributions if available
+    if "body" in word_importance:
+        body_path = save_path.replace(".png", "_body.png")
+        _plot_word_importance_single(word_importance["body"], body_path, top_k, view_name="Body")
+        print(f"Saved NAML word importance plots (title and body) to: {save_path}")
 
 
 def plot_word_frequency_from_top_samples(
