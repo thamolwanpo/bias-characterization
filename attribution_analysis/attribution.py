@@ -2139,19 +2139,24 @@ def compare_attributions(
         save_path: Path to save comparison results
         top_k: Number of top positive and negative changes to display
     """
+    # Handle new structure with "title" key (and optionally "body")
+    # Use title importance for the comparison
+    clean_title = clean_importance.get("title", clean_importance)
+    poisoned_title = poisoned_importance.get("title", poisoned_importance)
+
     # Find words that changed importance significantly
     changes = {"real": {}, "fake": {}}
 
     for label in ["real", "fake"]:
-        clean_words = set(clean_importance["clean"][label].keys())
-        poisoned_words = set(poisoned_importance["poisoned"][label].keys())
+        clean_words = set(clean_title["clean"][label].keys())
+        poisoned_words = set(poisoned_title["poisoned"][label].keys())
 
         # Common words
         common = clean_words & poisoned_words
 
         for word in common:
-            clean_score = clean_importance["clean"][label][word]["mean"]
-            poisoned_score = poisoned_importance["poisoned"][label][word]["mean"]
+            clean_score = clean_title["clean"][label][word]["mean"]
+            poisoned_score = poisoned_title["poisoned"][label][word]["mean"]
 
             change = poisoned_score - clean_score
             if abs(change) > 0.01:  # Significant change threshold
@@ -2164,11 +2169,11 @@ def compare_attributions(
         # New important words in poisoned
         new_words = poisoned_words - clean_words
         for word in new_words:
-            if poisoned_importance["poisoned"][label][word]["count"] >= 3:
+            if poisoned_title["poisoned"][label][word]["count"] >= 3:
                 changes[label][word] = {
                     "clean": 0.0,
-                    "poisoned": poisoned_importance["poisoned"][label][word]["mean"],
-                    "change": poisoned_importance["poisoned"][label][word]["mean"],
+                    "poisoned": poisoned_title["poisoned"][label][word]["mean"],
+                    "change": poisoned_title["poisoned"][label][word]["mean"],
                 }
 
     # Visualize changes
