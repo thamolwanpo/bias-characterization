@@ -533,10 +533,13 @@ def compute_attributions_transformer_naml(
         # Backward pass
         score.sum().backward()
 
-        # Accumulate gradients
+        # Accumulate gradients and properly clean up
         if interpolated.grad is not None:
-            accumulated_grads += interpolated.grad
+            accumulated_grads += interpolated.grad.detach().clone()
             interpolated.grad = None
+
+        # Explicitly delete tensors to free memory
+        del candidate_emb, score, interpolated
 
     # Average and multiply by difference
     avg_grads = accumulated_grads / n_steps
@@ -1040,11 +1043,15 @@ def extract_attributions_for_dataset(
 
         # Periodic GPU memory cleanup
         if device != "cpu" and torch.cuda.is_available() and sample_count % 100 == 0:
-            torch.cuda.empty_cache()
-            if sample_count % 500 == 0:  # Report every 500 samples
-                print(
-                    f"  GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
-                )
+            try:
+                torch.cuda.empty_cache()
+                if sample_count % 500 == 0:  # Report every 500 samples
+                    print(
+                        f"  GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
+                    )
+            except RuntimeError as e:
+                print(f"\nWarning: Error during GPU cache cleanup: {e}")
+                # Continue processing despite cache cleanup error
 
     print(f"\nExtracted attributions for {len(all_attributions)} samples")
     if is_naml:
@@ -1053,10 +1060,13 @@ def extract_attributions_for_dataset(
 
     # Final cleanup
     if device != "cpu" and torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        print(
-            f"Final GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
-        )
+        try:
+            torch.cuda.empty_cache()
+            print(
+                f"Final GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
+            )
+        except RuntimeError as e:
+            print(f"\nWarning: Error during final GPU cache cleanup: {e}")
 
     result = {
         "attributions": all_attributions,
@@ -1280,10 +1290,13 @@ def compute_attributions_transformer(
         # Backward pass - sum to scalar for backward
         score.sum().backward()
 
-        # Accumulate gradients
+        # Accumulate gradients and properly clean up
         if interpolated.grad is not None:
-            accumulated_grads += interpolated.grad
+            accumulated_grads += interpolated.grad.detach().clone()
             interpolated.grad = None
+
+        # Explicitly delete tensors to free memory
+        del candidate_emb, score, interpolated
 
     # Average and multiply by difference
     avg_grads = accumulated_grads / n_steps
