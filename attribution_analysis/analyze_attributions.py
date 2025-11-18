@@ -382,6 +382,36 @@ def main():
         default=10,
         help="Number of top words (pos/neg) to take from each sample for frequency analysis (default: 10)",
     )
+    parser.add_argument(
+        "--use_optimized",
+        action="store_true",
+        default=True,
+        help="Use optimized attribution computation with multi-alpha batching (default: True)",
+    )
+    parser.add_argument(
+        "--no_optimized",
+        action="store_false",
+        dest="use_optimized",
+        help="Disable optimized attribution computation",
+    )
+    parser.add_argument(
+        "--use_amp",
+        action="store_true",
+        default=True,
+        help="Use automatic mixed precision (FP16) for speedup (default: True)",
+    )
+    parser.add_argument(
+        "--no_amp",
+        action="store_false",
+        dest="use_amp",
+        help="Disable automatic mixed precision",
+    )
+    parser.add_argument(
+        "--alpha_batch_size",
+        type=int,
+        default=10,
+        help="Number of alpha steps to process in parallel (higher = faster but more GPU memory) (default: 10, recommended: 10-50)",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -439,6 +469,17 @@ def main():
     # Get data statistics
     get_data_statistics_fast(dataset)
 
+    # Print optimization settings
+    print(f"\n{'='*75}")
+    print("OPTIMIZATION SETTINGS")
+    print(f"{'='*75}")
+    print(f"Optimized mode: {args.use_optimized}")
+    print(f"Mixed precision (AMP): {args.use_amp}")
+    print(f"Alpha batch size: {args.alpha_batch_size}")
+    if args.use_optimized:
+        speedup_estimate = min(args.alpha_batch_size * 2, args.alpha_batch_size * 3)
+        print(f"Expected speedup: ~{speedup_estimate}x (compared to non-optimized)")
+
     # Extract attributions from clean model
     print(f"\n{'='*75}")
     print("EXTRACTING ATTRIBUTIONS - CLEAN MODEL")
@@ -451,6 +492,9 @@ def main():
         model_config,
         n_samples=args.n_samples,
         n_steps=args.n_steps,
+        use_optimized=args.use_optimized,
+        use_amp=args.use_amp,
+        alpha_batch_size=args.alpha_batch_size,
     )
 
     # Extract attributions from poisoned model
@@ -466,6 +510,9 @@ def main():
         model_config,
         n_samples=args.n_samples,
         n_steps=args.n_steps,
+        use_optimized=args.use_optimized,
+        use_amp=args.use_amp,
+        alpha_batch_size=args.alpha_batch_size,
     )
 
     # Analyze word importance

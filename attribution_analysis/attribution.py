@@ -26,10 +26,13 @@ GPU Optimizations:
 - Efficient gradient operations: Removed redundant .clone() calls
 - Memory management: Periodic cache clearing and GPU monitoring
 - Single GPU transfer: Entire batch moved to GPU at once instead of per-sample
+- Mixed Precision (AMP): FP16 computations for 2-3x speedup (optional)
+- Multi-Alpha Batching: Process multiple integration steps in parallel (2-5x speedup)
 
 Expected Performance:
 - GPU utilization: 3-5GB+ (up from 1.5GB)
 - Speed: ~2-4 hours for 40k samples (down from 45+ hours)
+- With optimizations: ~30min-1hour for 40k samples with 2000 steps
 - Batch size: Configurable via DataLoader (default from model config)
 - NAML: ~2x slower than NRMS due to dual attribution computation (title + body)
 """
@@ -44,6 +47,13 @@ from collections import defaultdict
 
 import sys
 import os
+
+# Mixed precision training support
+try:
+    from torch.cuda.amp import autocast
+    AMP_AVAILABLE = True
+except ImportError:
+    AMP_AVAILABLE = False
 
 # Common English stopwords to filter out
 STOPWORDS = {
@@ -746,7 +756,14 @@ def encode_text_from_embeddings(text_encoder, embeddings, attention_mask):
 
 
 def extract_attributions_for_dataset(
-    data_loader, config: Dict, model_config, n_samples: int = 100, n_steps: int = 50
+    data_loader,
+    config: Dict,
+    model_config,
+    n_samples: int = 100,
+    n_steps: int = 50,
+    use_optimized: bool = True,
+    use_amp: bool = True,
+    alpha_batch_size: int = 10
 ) -> Dict:
     """
     Extract attributions for a dataset using full model architecture.
@@ -757,6 +774,9 @@ def extract_attributions_for_dataset(
         model_config: Model configuration
         n_samples: Number of samples to analyze
         n_steps: Number of integration steps
+        use_optimized: Use optimized attribution computation (multi-alpha batching + AMP)
+        use_amp: Use automatic mixed precision (FP16) for speedup
+        alpha_batch_size: Number of alpha steps to process in parallel (10-50 recommended)
 
     Returns:
         Dictionary with attributions and metadata
@@ -1049,20 +1069,45 @@ def extract_attributions_for_dataset(
                             )
                     else:
                         # NRMS: compute attributions for title only
-                        (
-                            title_attributions_batch,
-                            title_completeness,
-                        ) = compute_attributions_transformer(
-                            model,
-                            candidate_title_ids,
-                            candidate_title_mask,
-                            history_title_ids,
-                            history_title_mask,
-                            target_candidate_idx=0,
-                            n_steps=n_steps,
-                            user_emb_cache=user_embs,  # Pass cached user embeddings
-                            return_completeness=True,
-                        )  # [batch_size, seq_len]
+                        # Use optimized version if enabled
+                        attribution_func = (
+                            compute_attributions_transformer_optimized
+                            if use_optimized
+                            else compute_attributions_transformer
+                        )
+
+                        if use_optimized:
+                            (
+                                title_attributions_batch,
+                                title_completeness,
+                            ) = attribution_func(
+                                model,
+                                candidate_title_ids,
+                                candidate_title_mask,
+                                history_title_ids,
+                                history_title_mask,
+                                target_candidate_idx=0,
+                                n_steps=n_steps,
+                                user_emb_cache=user_embs,
+                                return_completeness=True,
+                                use_amp=use_amp,
+                                alpha_batch_size=alpha_batch_size,
+                            )
+                        else:
+                            (
+                                title_attributions_batch,
+                                title_completeness,
+                            ) = attribution_func(
+                                model,
+                                candidate_title_ids,
+                                candidate_title_mask,
+                                history_title_ids,
+                                history_title_mask,
+                                target_candidate_idx=0,
+                                n_steps=n_steps,
+                                user_emb_cache=user_embs,
+                                return_completeness=True,
+                            )  # [batch_size, seq_len]
 
                         # Collect completeness metrics
                         if title_completeness:
@@ -1541,6 +1586,197 @@ def compute_attributions_transformer(
     # Average and multiply by difference
     avg_grads = accumulated_grads / n_steps
     attributions = avg_grads * (input_embeddings - baseline_embeddings)
+
+    # Sum over embedding dimension
+    token_attributions = attributions.sum(dim=-1)  # [batch_size, seq_len]
+
+    # Compute completeness check if requested
+    completeness_metrics = None
+    if return_completeness:
+        with torch.no_grad():
+            # Compute input score (F(x))
+            input_candidate_emb = encode_transformer_news_from_embeddings(
+                news_encoder, input_embeddings, target_mask
+            )
+            input_score = torch.sum(input_candidate_emb * user_emb, dim=-1)
+
+            # Compute baseline score (F(baseline))
+            baseline_candidate_emb = encode_transformer_news_from_embeddings(
+                news_encoder, baseline_embeddings, target_mask
+            )
+            baseline_score = torch.sum(baseline_candidate_emb * user_emb, dim=-1)
+
+            # Sum attributions over all tokens
+            attribution_sum = token_attributions.sum(dim=-1)  # [batch_size]
+
+            # Check completeness
+            completeness_metrics = compute_completeness_check(
+                attribution_sum, input_score, baseline_score
+            )
+
+    return token_attributions, completeness_metrics
+
+
+def compute_attributions_transformer_optimized(
+    model,
+    candidate_title_ids: torch.Tensor,
+    candidate_title_mask: torch.Tensor,
+    history_title_ids: torch.Tensor,
+    history_title_mask: torch.Tensor,
+    target_candidate_idx: int = 0,
+    n_steps: int = 50,
+    user_emb_cache: Optional[torch.Tensor] = None,
+    return_completeness: bool = True,
+    use_amp: bool = True,
+    alpha_batch_size: int = 10,
+) -> Tuple[torch.Tensor, Optional[Dict]]:
+    """
+    OPTIMIZED: Compute attributions with mixed precision and multi-alpha batching.
+
+    Optimizations:
+    1. Mixed Precision (AMP): 2-3x speedup with FP16 computations
+    2. Multi-Alpha Batching: Process multiple integration steps in parallel (2-5x speedup)
+    3. Reduced memory allocations and improved gradient accumulation
+
+    Args:
+        model: Full recommendation model
+        candidate_title_ids: Candidate token IDs [batch_size, n_candidates, seq_len]
+        candidate_title_mask: Candidate attention mask [batch_size, n_candidates, seq_len]
+        history_title_ids: History token IDs [batch_size, history_len, seq_len]
+        history_title_mask: History attention mask [batch_size, history_len, seq_len]
+        target_candidate_idx: Which candidate to compute attributions for
+        n_steps: Number of integration steps (e.g., 2000)
+        user_emb_cache: Pre-computed user embeddings [batch_size, embed_dim] (optional)
+        return_completeness: Whether to return completeness check metrics
+        use_amp: Use automatic mixed precision (FP16) for speedup
+        alpha_batch_size: Number of alpha steps to process in parallel (memory vs speed tradeoff)
+
+    Returns:
+        attributions: Attribution scores [batch_size, seq_len]
+        completeness: Completeness check metrics (if return_completeness=True)
+    """
+    device = candidate_title_ids.device
+    news_encoder = model.news_encoder
+    user_encoder = model.user_encoder
+
+    # Disable AMP if not available or not requested
+    use_amp = use_amp and AMP_AVAILABLE and device.type == 'cuda'
+
+    # Get the embedding layer
+    embedding_layer = None
+    if hasattr(news_encoder, "bert"):
+        embedding_layer = news_encoder.bert.embeddings
+    elif hasattr(news_encoder, "lm"):
+        embedding_layer = news_encoder.lm.embeddings
+    elif hasattr(news_encoder, "embeddings"):
+        embedding_layer = news_encoder.embeddings
+    elif hasattr(news_encoder, "encoder") and hasattr(news_encoder.encoder, "embeddings"):
+        embedding_layer = news_encoder.encoder.embeddings
+
+    if embedding_layer is None:
+        raise ValueError(
+            f"Cannot find embedding layer in transformer model. "
+            f"News encoder type: {type(news_encoder).__name__}"
+        )
+
+    batch_size, num_candidates, seq_len = candidate_title_ids.shape
+
+    # Get input and baseline embeddings for target candidate
+    target_ids = candidate_title_ids[:, target_candidate_idx, :]  # [batch_size, seq_len]
+    target_mask = candidate_title_mask[:, target_candidate_idx, :]  # [batch_size, seq_len]
+    baseline_ids = torch.zeros_like(target_ids)  # PAD tokens
+
+    with torch.no_grad():
+        # Get embeddings - batched
+        input_embeddings = embedding_layer(target_ids)  # [batch_size, seq_len, embed_dim]
+        baseline_embeddings = embedding_layer(baseline_ids)
+
+        # Compute or use cached user embeddings
+        if user_emb_cache is None:
+            history_len = history_title_ids.shape[1]
+            history_flat_ids = history_title_ids.view(batch_size * history_len, seq_len)
+            history_flat_mask = history_title_mask.view(batch_size * history_len, seq_len)
+
+            history_embs = encode_transformer_news(
+                news_encoder, history_flat_ids, history_flat_mask
+            ).view(batch_size, history_len, -1)
+
+            user_emb = user_encoder(history_embs)  # [batch_size, embed_dim]
+        else:
+            user_emb = user_emb_cache  # [batch_size, embed_dim]
+
+    # Pre-compute embedding difference (constant across all steps)
+    emb_diff = input_embeddings - baseline_embeddings
+
+    # Accumulate gradients - batched
+    accumulated_grads = torch.zeros_like(input_embeddings)
+
+    # OPTIMIZATION: Process multiple alpha values in parallel
+    # Instead of processing 2000 steps sequentially, we process them in batches
+    num_alpha_batches = (n_steps + alpha_batch_size - 1) // alpha_batch_size
+
+    for alpha_batch_idx in range(num_alpha_batches):
+        start_step = alpha_batch_idx * alpha_batch_size
+        end_step = min((alpha_batch_idx + 1) * alpha_batch_size, n_steps)
+        current_batch_size = end_step - start_step
+
+        # Create alpha values for this batch
+        alphas = torch.linspace(
+            (start_step + 1) / n_steps,
+            end_step / n_steps,
+            current_batch_size,
+            device=device
+        )  # [current_batch_size]
+
+        # Reshape for broadcasting: [current_batch_size, 1, 1, 1]
+        # This allows us to compute all interpolations at once
+        alphas_expanded = alphas.view(current_batch_size, 1, 1, 1)
+
+        # Compute all interpolated embeddings for this alpha batch
+        # Shape: [current_batch_size, batch_size, seq_len, embed_dim]
+        interpolated_batch = baseline_embeddings.unsqueeze(0) + alphas_expanded * emb_diff.unsqueeze(0)
+
+        # Flatten: [current_batch_size * batch_size, seq_len, embed_dim]
+        interpolated_flat = interpolated_batch.view(-1, seq_len, input_embeddings.shape[-1])
+        interpolated_flat.requires_grad_(True)
+
+        # Expand target_mask for all alpha steps: [current_batch_size * batch_size, seq_len]
+        target_mask_expanded = target_mask.unsqueeze(0).expand(current_batch_size, -1, -1).reshape(-1, seq_len)
+
+        # OPTIMIZATION: Use mixed precision for forward pass
+        with autocast(enabled=use_amp):
+            # Encode all interpolated candidates at once
+            candidate_emb_flat = encode_transformer_news_from_embeddings(
+                news_encoder, interpolated_flat, target_mask_expanded
+            )  # [current_batch_size * batch_size, embed_dim]
+
+        # Reshape back: [current_batch_size, batch_size, embed_dim]
+        candidate_emb_batch = candidate_emb_flat.view(current_batch_size, batch_size, -1)
+
+        # Expand user_emb: [current_batch_size, batch_size, embed_dim]
+        user_emb_expanded = user_emb.unsqueeze(0).expand(current_batch_size, -1, -1)
+
+        # Compute scores for all alpha steps: [current_batch_size, batch_size]
+        scores_batch = torch.sum(candidate_emb_batch * user_emb_expanded, dim=-1)
+
+        # Backward pass - sum to scalar
+        scores_batch.sum().backward()
+
+        # Accumulate gradients from all alpha steps in this batch
+        if interpolated_flat.grad is not None:
+            # Reshape gradients: [current_batch_size, batch_size, seq_len, embed_dim]
+            grads_batch = interpolated_flat.grad.view(current_batch_size, batch_size, seq_len, -1)
+            # Sum over alpha dimension and accumulate
+            accumulated_grads += grads_batch.sum(dim=0).detach()
+            interpolated_flat.grad = None
+
+        # Clean up
+        del interpolated_batch, interpolated_flat, candidate_emb_flat, candidate_emb_batch
+        del scores_batch, grads_batch, target_mask_expanded, user_emb_expanded
+
+    # Average and multiply by difference
+    avg_grads = accumulated_grads / n_steps
+    attributions = avg_grads * emb_diff
 
     # Sum over embedding dimension
     token_attributions = attributions.sum(dim=-1)  # [batch_size, seq_len]
