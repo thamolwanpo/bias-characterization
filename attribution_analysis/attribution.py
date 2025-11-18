@@ -1187,9 +1187,7 @@ def extract_attributions_for_dataset(
     print("INTEGRATED GRADIENTS COMPLETENESS CHECK (Proposition 1)")
     print("=" * 75)
     print("Verifies that: ∑ Attribution_i ≈ F(x) - F(baseline)")
-    print(
-        "Recommended: Attributions should sum to within 5% of score difference\n"
-    )
+    print("Recommended: Attributions should sum to within 5% of score difference\n")
 
     # Title completeness metrics
     if all_completeness_metrics["rel_error_percent"]:
@@ -1203,11 +1201,11 @@ def extract_attributions_for_dataset(
         print(f"  Mean relative error: {rel_errors.mean():.2f}%")
         print(f"  Median relative error: {np.median(rel_errors):.2f}%")
         print(f"  Max relative error: {rel_errors.max():.2f}%")
-        print(f"  Samples within 5% error: {(rel_errors <= 5).sum()}/{len(rel_errors)} ({(rel_errors <= 5).mean() * 100:.1f}%)")
-        print(f"  Mean absolute error: {abs_errors.mean():.4f}")
         print(
-            f"  Mean expected diff [F(x) - F(baseline)]: {expected_diffs.mean():.4f}"
+            f"  Samples within 5% error: {(rel_errors <= 5).sum()}/{len(rel_errors)} ({(rel_errors <= 5).mean() * 100:.1f}%)"
         )
+        print(f"  Mean absolute error: {abs_errors.mean():.4f}")
+        print(f"  Mean expected diff [F(x) - F(baseline)]: {expected_diffs.mean():.4f}")
         print(f"  Mean actual sum [∑ Attribution_i]: {actual_sums.mean():.4f}")
 
         # Warn if errors are too high
@@ -1219,7 +1217,9 @@ def extract_attributions_for_dataset(
                 f"  Consider increasing n_steps (currently {n_steps}) for better approximation"
             )
         else:
-            print(f"\n  ✓ Completeness check passed (mean error: {rel_errors.mean():.2f}%)")
+            print(
+                f"\n  ✓ Completeness check passed (mean error: {rel_errors.mean():.2f}%)"
+            )
 
     # Body completeness metrics (NAML only)
     if is_naml and all_body_completeness_metrics["rel_error_percent"]:
@@ -1232,11 +1232,11 @@ def extract_attributions_for_dataset(
         print(f"  Mean relative error: {rel_errors.mean():.2f}%")
         print(f"  Median relative error: {np.median(rel_errors):.2f}%")
         print(f"  Max relative error: {rel_errors.max():.2f}%")
-        print(f"  Samples within 5% error: {(rel_errors <= 5).sum()}/{len(rel_errors)} ({(rel_errors <= 5).mean() * 100:.1f}%)")
-        print(f"  Mean absolute error: {abs_errors.mean():.4f}")
         print(
-            f"  Mean expected diff [F(x) - F(baseline)]: {expected_diffs.mean():.4f}"
+            f"  Samples within 5% error: {(rel_errors <= 5).sum()}/{len(rel_errors)} ({(rel_errors <= 5).mean() * 100:.1f}%)"
         )
+        print(f"  Mean absolute error: {abs_errors.mean():.4f}")
+        print(f"  Mean expected diff [F(x) - F(baseline)]: {expected_diffs.mean():.4f}")
         print(f"  Mean actual sum [∑ Attribution_i]: {actual_sums.mean():.4f}")
 
         # Warn if errors are too high
@@ -1248,7 +1248,9 @@ def extract_attributions_for_dataset(
                 f"  Consider increasing n_steps (currently {n_steps}) for better approximation"
             )
         else:
-            print(f"\n  ✓ Completeness check passed (mean error: {rel_errors.mean():.2f}%)")
+            print(
+                f"\n  ✓ Completeness check passed (mean error: {rel_errors.mean():.2f}%)"
+            )
 
     print("=" * 75)
 
@@ -1961,7 +1963,7 @@ def analyze_word_frequency_from_top_samples(
                         if (
                             not word_lower
                             or word_lower in STOPWORDS
-                            or len(word_lower) < 0
+                            or len(word_lower) < 2
                         ):
                             continue
 
