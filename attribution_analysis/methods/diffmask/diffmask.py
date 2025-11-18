@@ -44,7 +44,7 @@ class DIFFMASK(nn.Module):
         temperature: float = 2.0 / 3.0,
         stretch: float = 0.1,
         constraint_margin: float = 0.1,
-        lambda_init: float = 1.0,
+        lambda_init: float = 0.1,  # Reduced from 1.0 to allow L0 to dominate initially
         dropout: float = 0.1
     ):
         """

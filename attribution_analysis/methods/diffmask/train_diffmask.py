@@ -106,8 +106,9 @@ def train_diffmask(
                     pbar.set_postfix({
                         "L0": f"{metrics['l0_loss']:.2f}",
                         "Div": f"{metrics['divergence']:.4f}",
-                        "λ": f"{metrics['lambda']:.2f}",
-                        "Gates": f"{metrics['avg_gates']:.1f}"
+                        "λ": f"{metrics['lambda']:.3f}",
+                        "Gates": f"{metrics['avg_gates']:.1f}",
+                        "Lagr": f"{metrics['lagrangian']:.3f}"
                     })
 
             except Exception as e:
@@ -126,11 +127,19 @@ def train_diffmask(
 
         # Print epoch summary
         if verbose:
-            print(f"Epoch {epoch + 1} Summary:")
-            print(f"  L0 Loss: {history['l0_loss'][-1]:.2f}")
-            print(f"  Divergence: {history['divergence'][-1]:.4f}")
-            print(f"  Lambda: {history['lambda'][-1]:.2f}")
-            print(f"  Avg Gates: {history['avg_gates'][-1]:.1f}")
+            print(f"\nEpoch {epoch + 1} Summary:")
+            print(f"  L0 Loss: {history['l0_loss'][-1]:.3f}")
+            print(f"  Divergence: {history['divergence'][-1]:.5f}")
+            print(f"  Lambda: {history['lambda'][-1]:.3f}")
+            print(f"  Avg Gates: {history['avg_gates'][-1]:.2f}")
+            print(f"  Lagrangian: {history['lagrangian'][-1]:.3f}")
+
+            # Show trend if we have multiple epochs
+            if epoch > 0:
+                l0_change = history['l0_loss'][-1] - history['l0_loss'][-2]
+                div_change = history['divergence'][-1] - history['divergence'][-2]
+                lambda_change = history['lambda'][-1] - history['lambda'][-2]
+                print(f"  Changes: L0={l0_change:+.3f}, Div={div_change:+.5f}, λ={lambda_change:+.3f}")
 
         # Save checkpoint
         if save_dir is not None:
