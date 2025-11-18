@@ -411,7 +411,8 @@ def compute_attributions_transformer_naml(
     n_steps: int = 50,
     user_emb_cache: Optional[torch.Tensor] = None,
     attribution_target: str = "title",  # "title" or "body"
-) -> torch.Tensor:
+    return_completeness: bool = True,
+) -> Tuple[torch.Tensor, Optional[Dict]]:
     """
     Compute attributions for NAML transformer-based models.
 
@@ -432,9 +433,11 @@ def compute_attributions_transformer_naml(
         n_steps: Number of integration steps
         user_emb_cache: Pre-computed user embeddings [batch_size, embed_dim] (optional)
         attribution_target: Which view to compute attributions for ("title" or "body")
+        return_completeness: Whether to return completeness check metrics
 
     Returns:
         attributions: Attribution scores [batch_size, seq_len]
+        completeness: Completeness check metrics (if return_completeness=True)
     """
     device = candidate_title_ids.device
     news_encoder = model.news_encoder
@@ -548,7 +551,57 @@ def compute_attributions_transformer_naml(
     # Sum over embedding dimension
     token_attributions = attributions.sum(dim=-1)
 
-    return token_attributions
+    # Compute completeness check if requested
+    completeness_metrics = None
+    if return_completeness:
+        with torch.no_grad():
+            # Compute input score (F(x))
+            if attribution_target == "title":
+                input_candidate_emb = encode_naml_news_from_embeddings(
+                    news_encoder,
+                    title_embeddings=input_embeddings,
+                    title_mask=target_mask,
+                    body_ids=candidate_body_ids[:, target_candidate_idx, :],
+                    body_mask=candidate_body_mask[:, target_candidate_idx, :],
+                )
+            else:  # body
+                input_candidate_emb = encode_naml_news_from_embeddings(
+                    news_encoder,
+                    title_ids=candidate_title_ids[:, target_candidate_idx, :],
+                    title_mask=candidate_title_mask[:, target_candidate_idx, :],
+                    body_embeddings=input_embeddings,
+                    body_mask=target_mask,
+                )
+            input_score = torch.sum(input_candidate_emb * user_emb, dim=-1)
+
+            # Compute baseline score (F(baseline))
+            if attribution_target == "title":
+                baseline_candidate_emb = encode_naml_news_from_embeddings(
+                    news_encoder,
+                    title_embeddings=baseline_embeddings,
+                    title_mask=target_mask,
+                    body_ids=candidate_body_ids[:, target_candidate_idx, :],
+                    body_mask=candidate_body_mask[:, target_candidate_idx, :],
+                )
+            else:  # body
+                baseline_candidate_emb = encode_naml_news_from_embeddings(
+                    news_encoder,
+                    title_ids=candidate_title_ids[:, target_candidate_idx, :],
+                    title_mask=candidate_title_mask[:, target_candidate_idx, :],
+                    body_embeddings=baseline_embeddings,
+                    body_mask=target_mask,
+                )
+            baseline_score = torch.sum(baseline_candidate_emb * user_emb, dim=-1)
+
+            # Sum attributions over all tokens
+            attribution_sum = token_attributions.sum(dim=-1)  # [batch_size]
+
+            # Check completeness
+            completeness_metrics = compute_completeness_check(
+                attribution_sum, input_score, baseline_score
+            )
+
+    return token_attributions, completeness_metrics
 
 
 def encode_naml_news_batch(news_encoder, title_ids, title_mask, body_ids, body_mask):
@@ -727,6 +780,10 @@ def extract_attributions_for_dataset(
             f"Initial GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
         )
 
+    use_glove = "glove" in model_config.model_name.lower()
+    architecture = model_config.architecture
+    is_naml = architecture == "naml"
+
     # Storage
     all_attributions = []
     all_tokens = []
@@ -738,9 +795,21 @@ def extract_attributions_for_dataset(
     all_body_attributions = []
     all_body_tokens = []
 
-    use_glove = "glove" in model_config.model_name.lower()
-    architecture = model_config.architecture
-    is_naml = architecture == "naml"
+    # Storage for completeness metrics
+    all_completeness_metrics = {
+        "expected_diff": [],
+        "actual_sum": [],
+        "abs_error": [],
+        "rel_error_percent": [],
+    }
+    # For NAML, track body completeness separately
+    if is_naml:
+        all_body_completeness_metrics = {
+            "expected_diff": [],
+            "actual_sum": [],
+            "abs_error": [],
+            "rel_error_percent": [],
+        }
 
     print(f"Extracting attributions for {n_samples} samples...")
     print(f"  Model type: {'GloVe' if use_glove else 'Transformer'}")
@@ -908,26 +977,31 @@ def extract_attributions_for_dataset(
                     if is_naml:
                         # NAML: compute attributions for both title and body
                         # Title attributions
-                        title_attributions_batch = (
-                            compute_attributions_transformer_naml(
-                                model,
-                                candidate_title_ids,
-                                candidate_title_mask,
-                                candidate_body_ids,
-                                candidate_body_mask,
-                                history_title_ids,
-                                history_title_mask,
-                                history_body_ids,
-                                history_body_mask,
-                                target_candidate_idx=0,
-                                n_steps=n_steps,
-                                user_emb_cache=user_embs,
-                                attribution_target="title",
-                            )
+                        (
+                            title_attributions_batch,
+                            title_completeness,
+                        ) = compute_attributions_transformer_naml(
+                            model,
+                            candidate_title_ids,
+                            candidate_title_mask,
+                            candidate_body_ids,
+                            candidate_body_mask,
+                            history_title_ids,
+                            history_title_mask,
+                            history_body_ids,
+                            history_body_mask,
+                            target_candidate_idx=0,
+                            n_steps=n_steps,
+                            user_emb_cache=user_embs,
+                            attribution_target="title",
+                            return_completeness=True,
                         )  # [batch_size, seq_len]
 
                         # Body attributions
-                        body_attributions_batch = compute_attributions_transformer_naml(
+                        (
+                            body_attributions_batch,
+                            body_completeness,
+                        ) = compute_attributions_transformer_naml(
                             model,
                             candidate_title_ids,
                             candidate_title_mask,
@@ -941,10 +1015,44 @@ def extract_attributions_for_dataset(
                             n_steps=n_steps,
                             user_emb_cache=user_embs,
                             attribution_target="body",
+                            return_completeness=True,
                         )  # [batch_size, seq_len]
+
+                        # Collect completeness metrics for title
+                        if title_completeness:
+                            all_completeness_metrics["expected_diff"].extend(
+                                title_completeness["expected_diff"]
+                            )
+                            all_completeness_metrics["actual_sum"].extend(
+                                title_completeness["actual_sum"]
+                            )
+                            all_completeness_metrics["abs_error"].extend(
+                                title_completeness["abs_error"]
+                            )
+                            all_completeness_metrics["rel_error_percent"].extend(
+                                title_completeness["rel_error_percent"]
+                            )
+
+                        # Collect completeness metrics for body
+                        if body_completeness:
+                            all_body_completeness_metrics["expected_diff"].extend(
+                                body_completeness["expected_diff"]
+                            )
+                            all_body_completeness_metrics["actual_sum"].extend(
+                                body_completeness["actual_sum"]
+                            )
+                            all_body_completeness_metrics["abs_error"].extend(
+                                body_completeness["abs_error"]
+                            )
+                            all_body_completeness_metrics["rel_error_percent"].extend(
+                                body_completeness["rel_error_percent"]
+                            )
                     else:
                         # NRMS: compute attributions for title only
-                        title_attributions_batch = compute_attributions_transformer(
+                        (
+                            title_attributions_batch,
+                            title_completeness,
+                        ) = compute_attributions_transformer(
                             model,
                             candidate_title_ids,
                             candidate_title_mask,
@@ -953,7 +1061,23 @@ def extract_attributions_for_dataset(
                             target_candidate_idx=0,
                             n_steps=n_steps,
                             user_emb_cache=user_embs,  # Pass cached user embeddings
+                            return_completeness=True,
                         )  # [batch_size, seq_len]
+
+                        # Collect completeness metrics
+                        if title_completeness:
+                            all_completeness_metrics["expected_diff"].extend(
+                                title_completeness["expected_diff"]
+                            )
+                            all_completeness_metrics["actual_sum"].extend(
+                                title_completeness["actual_sum"]
+                            )
+                            all_completeness_metrics["abs_error"].extend(
+                                title_completeness["abs_error"]
+                            )
+                            all_completeness_metrics["rel_error_percent"].extend(
+                                title_completeness["rel_error_percent"]
+                            )
 
                 # Get prediction scores for entire batch
                 with torch.no_grad():
@@ -1058,12 +1182,82 @@ def extract_attributions_for_dataset(
         print(f"  Title attributions: {len(all_attributions)} samples")
         print(f"  Body attributions: {len(all_body_attributions)} samples")
 
+    # Print completeness check results
+    print("\n" + "=" * 75)
+    print("INTEGRATED GRADIENTS COMPLETENESS CHECK (Proposition 1)")
+    print("=" * 75)
+    print("Verifies that: ∑ Attribution_i ≈ F(x) - F(baseline)")
+    print(
+        "Recommended: Attributions should sum to within 5% of score difference\n"
+    )
+
+    # Title completeness metrics
+    if all_completeness_metrics["rel_error_percent"]:
+        rel_errors = np.array(all_completeness_metrics["rel_error_percent"])
+        abs_errors = np.array(all_completeness_metrics["abs_error"])
+        expected_diffs = np.array(all_completeness_metrics["expected_diff"])
+        actual_sums = np.array(all_completeness_metrics["actual_sum"])
+
+        view_name = "Title" if is_naml else ""
+        print(f"{view_name} Attribution Completeness:")
+        print(f"  Mean relative error: {rel_errors.mean():.2f}%")
+        print(f"  Median relative error: {np.median(rel_errors):.2f}%")
+        print(f"  Max relative error: {rel_errors.max():.2f}%")
+        print(f"  Samples within 5% error: {(rel_errors <= 5).sum()}/{len(rel_errors)} ({(rel_errors <= 5).mean() * 100:.1f}%)")
+        print(f"  Mean absolute error: {abs_errors.mean():.4f}")
+        print(
+            f"  Mean expected diff [F(x) - F(baseline)]: {expected_diffs.mean():.4f}"
+        )
+        print(f"  Mean actual sum [∑ Attribution_i]: {actual_sums.mean():.4f}")
+
+        # Warn if errors are too high
+        if rel_errors.mean() > 5:
+            print(
+                f"\n  ⚠️  WARNING: Mean relative error ({rel_errors.mean():.2f}%) exceeds 5%"
+            )
+            print(
+                f"  Consider increasing n_steps (currently {n_steps}) for better approximation"
+            )
+        else:
+            print(f"\n  ✓ Completeness check passed (mean error: {rel_errors.mean():.2f}%)")
+
+    # Body completeness metrics (NAML only)
+    if is_naml and all_body_completeness_metrics["rel_error_percent"]:
+        rel_errors = np.array(all_body_completeness_metrics["rel_error_percent"])
+        abs_errors = np.array(all_body_completeness_metrics["abs_error"])
+        expected_diffs = np.array(all_body_completeness_metrics["expected_diff"])
+        actual_sums = np.array(all_body_completeness_metrics["actual_sum"])
+
+        print(f"\nBody Attribution Completeness:")
+        print(f"  Mean relative error: {rel_errors.mean():.2f}%")
+        print(f"  Median relative error: {np.median(rel_errors):.2f}%")
+        print(f"  Max relative error: {rel_errors.max():.2f}%")
+        print(f"  Samples within 5% error: {(rel_errors <= 5).sum()}/{len(rel_errors)} ({(rel_errors <= 5).mean() * 100:.1f}%)")
+        print(f"  Mean absolute error: {abs_errors.mean():.4f}")
+        print(
+            f"  Mean expected diff [F(x) - F(baseline)]: {expected_diffs.mean():.4f}"
+        )
+        print(f"  Mean actual sum [∑ Attribution_i]: {actual_sums.mean():.4f}")
+
+        # Warn if errors are too high
+        if rel_errors.mean() > 5:
+            print(
+                f"\n  ⚠️  WARNING: Mean relative error ({rel_errors.mean():.2f}%) exceeds 5%"
+            )
+            print(
+                f"  Consider increasing n_steps (currently {n_steps}) for better approximation"
+            )
+        else:
+            print(f"\n  ✓ Completeness check passed (mean error: {rel_errors.mean():.2f}%)")
+
+    print("=" * 75)
+
     # Final cleanup
     if device != "cpu" and torch.cuda.is_available():
         try:
             torch.cuda.empty_cache()
             print(
-                f"Final GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
+                f"\nFinal GPU Memory: {torch.cuda.memory_allocated(device) / 1024**3:.2f} GB"
             )
         except RuntimeError as e:
             print(f"\nWarning: Error during final GPU cache cleanup: {e}")
@@ -1074,12 +1268,14 @@ def extract_attributions_for_dataset(
         "labels": np.array(all_labels[: len(all_attributions)]),
         "scores": np.array(all_scores),
         "predictions": np.array(all_predictions),
+        "completeness_metrics": all_completeness_metrics,
     }
 
     # Add body attributions for NAML
     if is_naml:
         result["body_attributions"] = all_body_attributions
         result["body_tokens"] = all_body_tokens
+        result["body_completeness_metrics"] = all_body_completeness_metrics
 
     return result
 
@@ -1173,6 +1369,45 @@ def compute_attributions_glove(
     return word_attributions
 
 
+def compute_completeness_check(
+    attribution_sum: torch.Tensor,
+    input_score: torch.Tensor,
+    baseline_score: torch.Tensor,
+) -> Dict[str, float]:
+    """
+    Check completeness of Integrated Gradients (Proposition 1).
+
+    Verifies that: ∑ Attribution_i ≈ F(x) - F(baseline)
+
+    Args:
+        attribution_sum: Sum of all attributions [batch_size]
+        input_score: Model score at input [batch_size]
+        baseline_score: Model score at baseline [batch_size]
+
+    Returns:
+        Dictionary with completeness metrics per sample
+    """
+    # Expected difference
+    expected_diff = input_score - baseline_score
+
+    # Actual sum of attributions
+    actual_sum = attribution_sum
+
+    # Absolute error
+    abs_error = torch.abs(actual_sum - expected_diff)
+
+    # Relative error (percentage)
+    # Avoid division by zero
+    rel_error = abs_error / (torch.abs(expected_diff) + 1e-10) * 100
+
+    return {
+        "expected_diff": expected_diff.cpu().numpy(),
+        "actual_sum": actual_sum.cpu().numpy(),
+        "abs_error": abs_error.cpu().numpy(),
+        "rel_error_percent": rel_error.cpu().numpy(),
+    }
+
+
 def compute_attributions_transformer(
     model,
     candidate_title_ids: torch.Tensor,
@@ -1182,7 +1417,8 @@ def compute_attributions_transformer(
     target_candidate_idx: int = 0,
     n_steps: int = 50,
     user_emb_cache: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
+    return_completeness: bool = True,
+) -> Tuple[torch.Tensor, Optional[Dict]]:
     """
     Compute attributions for transformer-based models through full architecture.
 
@@ -1195,9 +1431,11 @@ def compute_attributions_transformer(
         target_candidate_idx: Which candidate to compute attributions for
         n_steps: Number of integration steps
         user_emb_cache: Pre-computed user embeddings [batch_size, embed_dim] (optional)
+        return_completeness: Whether to return completeness check metrics
 
     Returns:
         attributions: Attribution scores [batch_size, seq_len]
+        completeness: Completeness check metrics (if return_completeness=True)
     """
     device = candidate_title_ids.device
     news_encoder = model.news_encoder
@@ -1305,7 +1543,31 @@ def compute_attributions_transformer(
     # Sum over embedding dimension
     token_attributions = attributions.sum(dim=-1)  # [batch_size, seq_len]
 
-    return token_attributions
+    # Compute completeness check if requested
+    completeness_metrics = None
+    if return_completeness:
+        with torch.no_grad():
+            # Compute input score (F(x))
+            input_candidate_emb = encode_transformer_news_from_embeddings(
+                news_encoder, input_embeddings, target_mask
+            )
+            input_score = torch.sum(input_candidate_emb * user_emb, dim=-1)
+
+            # Compute baseline score (F(baseline))
+            baseline_candidate_emb = encode_transformer_news_from_embeddings(
+                news_encoder, baseline_embeddings, target_mask
+            )
+            baseline_score = torch.sum(baseline_candidate_emb * user_emb, dim=-1)
+
+            # Sum attributions over all tokens
+            attribution_sum = token_attributions.sum(dim=-1)  # [batch_size]
+
+            # Check completeness
+            completeness_metrics = compute_completeness_check(
+                attribution_sum, input_score, baseline_score
+            )
+
+    return token_attributions, completeness_metrics
 
 
 def encode_transformer_news(news_encoder, input_ids, attention_mask):
