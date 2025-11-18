@@ -97,12 +97,17 @@ class DIFFMASK(nn.Module):
         self.baseline = nn.Parameter(torch.zeros(hidden_dim))
 
         # Lagrangian multiplier (learned during training)
+        # Use log-space to ensure positivity, but clip to prevent explosion
         self.log_lambda = nn.Parameter(torch.tensor(np.log(lambda_init)))
+        self.log_lambda_max = 10.0  # Max lambda = exp(10) ≈ 22000
+        self.log_lambda_min = -10.0  # Min lambda = exp(-10) ≈ 0.000045
 
     @property
     def lambda_(self) -> torch.Tensor:
-        """Get Lagrangian multiplier (always positive)."""
-        return torch.exp(self.log_lambda)
+        """Get Lagrangian multiplier (always positive and bounded)."""
+        # Clip log_lambda to prevent numerical overflow
+        clipped_log_lambda = torch.clamp(self.log_lambda, self.log_lambda_min, self.log_lambda_max)
+        return torch.exp(clipped_log_lambda)
 
     def get_hidden_states_with_embeddings(
         self,
@@ -372,7 +377,15 @@ class DIFFMASK(nn.Module):
         optimizer_lambda.zero_grad()
         neg_loss = -loss
         neg_loss.backward(retain_graph=True)
+
+        # Clip gradients to prevent lambda from exploding
+        torch.nn.utils.clip_grad_norm_([self.log_lambda], max_norm=1.0)
+
         optimizer_lambda.step()
+
+        # Explicitly clamp log_lambda after update to ensure it stays in bounds
+        with torch.no_grad():
+            self.log_lambda.data.clamp_(self.log_lambda_min, self.log_lambda_max)
 
         # Update probe and baseline (minimize loss)
         # Note: loss is already computed, so we just do backward again

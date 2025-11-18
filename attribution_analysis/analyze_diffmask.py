@@ -114,8 +114,8 @@ def parse_args():
     parser.add_argument(
         "--lr_lambda",
         type=float,
-        default=1e-2,
-        help="Learning rate for Lagrangian multiplier (default: 1e-2)",
+        default=1e-3,
+        help="Learning rate for Lagrangian multiplier (default: 1e-3, reduced to prevent explosion)",
     )
 
     parser.add_argument(
