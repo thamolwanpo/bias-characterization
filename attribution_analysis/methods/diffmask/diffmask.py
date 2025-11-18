@@ -382,7 +382,7 @@ class DIFFMASK(nn.Module):
                 user_emb
             )
 
-        # Compute loss
+        # Compute loss for lambda update
         loss, metrics = self.compute_loss(
             candidate_title_ids,
             candidate_title_mask,
@@ -392,27 +392,35 @@ class DIFFMASK(nn.Module):
         )
 
         # Update lambda first (maximize loss -> minimize negative loss)
-        # This must be done before updating probe/baseline to avoid in-place modification errors
         optimizer_lambda.zero_grad()
         neg_loss = -loss
-        neg_loss.backward(retain_graph=True)
+        neg_loss.backward()
 
         # Clip gradients to prevent lambda from exploding
         torch.nn.utils.clip_grad_norm_([self.log_lambda], max_norm=1.0)
 
         optimizer_lambda.step()
 
-        # Update probe and baseline (minimize loss)
-        # Note: loss is already computed, so we just do backward again
-        optimizer_probe.zero_grad()
-        optimizer_baseline.zero_grad()
-        loss.backward()
-        optimizer_probe.step()
-        optimizer_baseline.step()
-
-        # Clamp log_lambda after all backward passes to avoid in-place operation errors
+        # Clamp log_lambda after update
         with torch.no_grad():
             self.log_lambda.data.clamp_(self.log_lambda_min, self.log_lambda_max)
+
+        # Recompute loss with updated lambda for probe/baseline update
+        # This creates a fresh computation graph without in-place operation issues
+        loss_probe, _ = self.compute_loss(
+            candidate_title_ids,
+            candidate_title_mask,
+            original_output,
+            user_emb,
+            training=True
+        )
+
+        # Update probe and baseline (minimize loss)
+        optimizer_probe.zero_grad()
+        optimizer_baseline.zero_grad()
+        loss_probe.backward()
+        optimizer_probe.step()
+        optimizer_baseline.step()
 
         return metrics
 
