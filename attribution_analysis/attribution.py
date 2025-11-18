@@ -1699,7 +1699,7 @@ def analyze_word_frequency_from_top_samples(
                         if (
                             not word_lower
                             or word_lower in STOPWORDS
-                            or len(word_lower) < 2
+                            or len(word_lower) < 0
                         ):
                             continue
 
@@ -2020,14 +2020,14 @@ def plot_word_frequency_from_top_samples(
             sorted_positive = sorted(
                 positive_data.items(),
                 key=lambda x: (x[1]["frequency"], x[1]["mean_attribution"]),
-                reverse=True
+                reverse=True,
             )[:top_k]
 
             # Get top_k negative words (sorted by frequency first, then attribution magnitude)
             sorted_negative = sorted(
                 negative_data.items(),
                 key=lambda x: (x[1]["frequency"], -x[1]["mean_attribution"]),
-                reverse=True
+                reverse=True,
             )[:top_k]
 
             # Combine them (positive first, then negative)
