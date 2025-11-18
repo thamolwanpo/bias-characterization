@@ -1019,22 +1019,21 @@ def analyze_word_importance(
 
 
 def analyze_word_frequency_from_top_samples(
-    attributions_clean: Dict, attributions_poisoned: Dict, top_k_samples: int = 10
+    attributions_clean: Dict, attributions_poisoned: Dict, top_k_sample: int = 10
 ) -> Dict:
     """
-    Analyze word frequency from top-k most affected samples.
+    Analyze word frequency from top-k words per sample.
 
     This is an alternative approach to word importance analysis:
-    1. Score each sample by total attribution magnitude (sum of |positive| + |negative|)
-    2. Rank samples by score (high = most affected, low = unaffected)
-    3. Take top_k samples with highest scores
-    4. Combine all words from those top_k samples (split by space, filter stopwords)
-    5. Rank words by frequency separately for positive and negative attributions
+    1. For each sample, get top_k_sample positive words and top_k_sample negative words
+    2. Combine all words from all samples
+    3. Split words by space, filter stopwords
+    4. Rank words by frequency separately for positive and negative attributions
 
     Args:
         attributions_clean: Attributions from clean model
         attributions_poisoned: Attributions from poisoned model
-        top_k_samples: Number of top affected samples to analyze
+        top_k_sample: Number of top words to take from each sample (for pos and neg separately)
 
     Returns:
         Dictionary with word frequency analysis results separated by positive/negative
@@ -1052,9 +1051,13 @@ def analyze_word_frequency_from_top_samples(
 
     def process_model_attributions(attributions_dict, model_key):
         """Process attributions for one model."""
-        # First, score each sample by total attribution magnitude
-        sample_scores = {"real": [], "fake": []}
-        sample_data = {"real": [], "fake": []}
+        # Collect word frequency from all samples - separate by positive/negative
+        positive_word_frequency = {"real": defaultdict(int), "fake": defaultdict(int)}
+        positive_word_attributions = {"real": defaultdict(list), "fake": defaultdict(list)}
+        negative_word_frequency = {"real": defaultdict(int), "fake": defaultdict(int)}
+        negative_word_attributions = {"real": defaultdict(list), "fake": defaultdict(list)}
+
+        sample_count = {"real": 0, "fake": 0}
 
         for attr, words, label in zip(
             attributions_dict["attributions"],
@@ -1062,51 +1065,26 @@ def analyze_word_frequency_from_top_samples(
             attributions_dict["labels"],
         ):
             label_key = "fake" if label == 1 else "real"
+            sample_count[label_key] += 1
 
-            if len(attr) > 0:
-                # Calculate sample score as sum of absolute attributions
-                # This gives us the total "impact" or "affectedness" of the sample
-                positive_score = np.sum(attr[attr > 0])
-                negative_score = np.abs(np.sum(attr[attr < 0]))
-                total_score = positive_score + negative_score
-
-                sample_scores[label_key].append(total_score)
-                sample_data[label_key].append({
-                    "attributions": attr,
-                    "words": words,
-                    "score": total_score
-                })
-
-        # For each label, get top_k most affected samples
-        for label_key in ["real", "fake"]:
-            if not sample_data[label_key]:
+            if len(attr) == 0:
                 continue
 
-            # Sort samples by score (descending - highest score = most affected)
-            sorted_samples = sorted(
-                sample_data[label_key],
-                key=lambda x: x["score"],
-                reverse=True
-            )
+            # Get top_k_sample positive words from this sample
+            positive_mask = attr > 0
+            if np.any(positive_mask):
+                positive_indices = np.where(positive_mask)[0]
+                positive_scores = attr[positive_indices]
+                # Sort and get top_k_sample highest positive scores
+                sorted_pos_idx = np.argsort(positive_scores)[-top_k_sample:]
+                top_positive_indices = positive_indices[sorted_pos_idx]
 
-            # Take top_k samples
-            top_samples = sorted_samples[:top_k_samples]
-
-            # Collect word frequency from top_k samples - separate by positive/negative
-            positive_word_frequency = defaultdict(int)
-            positive_word_attributions = defaultdict(list)
-            negative_word_frequency = defaultdict(int)
-            negative_word_attributions = defaultdict(list)
-
-            for sample in top_samples:
-                attr = sample["attributions"]
-                words = sample["words"]
-
-                # Process each word
-                for idx, word in enumerate(words):
-                    if idx >= len(attr):
+                # Process top positive words from this sample
+                for idx in top_positive_indices:
+                    if idx >= len(words):
                         continue
 
+                    word = words[idx]
                     attribution = float(attr[idx])
 
                     # Split word by space to handle multi-word tokens
@@ -1120,30 +1098,58 @@ def analyze_word_frequency_from_top_samples(
                         if not word_lower or word_lower in STOPWORDS or len(word_lower) < 2:
                             continue
 
-                        # Separate by attribution sign
-                        if attribution > 0:
-                            positive_word_frequency[word_lower] += 1
-                            positive_word_attributions[word_lower].append(attribution)
-                        elif attribution < 0:
-                            negative_word_frequency[word_lower] += 1
-                            negative_word_attributions[word_lower].append(attribution)
+                        positive_word_frequency[label_key][word_lower] += 1
+                        positive_word_attributions[label_key][word_lower].append(attribution)
 
+            # Get top_k_sample negative words from this sample
+            negative_mask = attr < 0
+            if np.any(negative_mask):
+                negative_indices = np.where(negative_mask)[0]
+                negative_scores = attr[negative_indices]
+                # Sort and get top_k_sample lowest (most negative) scores
+                sorted_neg_idx = np.argsort(negative_scores)[:top_k_sample]
+                top_negative_indices = negative_indices[sorted_neg_idx]
+
+                # Process top negative words from this sample
+                for idx in top_negative_indices:
+                    if idx >= len(words):
+                        continue
+
+                    word = words[idx]
+                    attribution = float(attr[idx])
+
+                    # Split word by space to handle multi-word tokens
+                    word_parts = word.split()
+
+                    for word_part in word_parts:
+                        # Convert to lowercase and filter stopwords
+                        word_lower = word_part.lower().strip()
+
+                        # Skip empty strings, stopwords, and very short words
+                        if not word_lower or word_lower in STOPWORDS or len(word_lower) < 2:
+                            continue
+
+                        negative_word_frequency[label_key][word_lower] += 1
+                        negative_word_attributions[label_key][word_lower].append(attribution)
+
+        # Store results for each label
+        for label_key in ["real", "fake"]:
             # Store results for positive words
-            for word, freq in positive_word_frequency.items():
+            for word, freq in positive_word_frequency[label_key].items():
                 results[model_key][label_key]["positive"][word] = {
                     "frequency": freq,
-                    "mean_attribution": np.mean(positive_word_attributions[word]),
-                    "std_attribution": np.std(positive_word_attributions[word]),
-                    "sample_count": len(top_samples)
+                    "mean_attribution": np.mean(positive_word_attributions[label_key][word]),
+                    "std_attribution": np.std(positive_word_attributions[label_key][word]),
+                    "sample_count": sample_count[label_key]
                 }
 
             # Store results for negative words
-            for word, freq in negative_word_frequency.items():
+            for word, freq in negative_word_frequency[label_key].items():
                 results[model_key][label_key]["negative"][word] = {
                     "frequency": freq,
-                    "mean_attribution": np.mean(negative_word_attributions[word]),
-                    "std_attribution": np.std(negative_word_attributions[word]),
-                    "sample_count": len(top_samples)
+                    "mean_attribution": np.mean(negative_word_attributions[label_key][word]),
+                    "std_attribution": np.std(negative_word_attributions[label_key][word]),
+                    "sample_count": sample_count[label_key]
                 }
 
     process_model_attributions(attributions_clean, "clean")
@@ -1388,12 +1394,12 @@ def plot_word_frequency_from_top_samples(
             ax.set_yticks(range(len(words)))
             ax.set_yticklabels(words, fontsize=8)
             ax.set_xlabel(
-                f"Frequency (out of {sample_count} most affected samples)", fontsize=10
+                f"Frequency (out of {sample_count} samples)", fontsize=10
             )
             ax.set_title(
                 f"{model_key.capitalize()} Model - {label_key.capitalize()} News\n"
-                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words\n"
-                f"(from {sample_count} most affected samples, stopwords removed)",
+                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words by Frequency\n"
+                f"(from all {sample_count} samples, stopwords removed)",
                 fontsize=11,
                 fontweight="bold",
             )

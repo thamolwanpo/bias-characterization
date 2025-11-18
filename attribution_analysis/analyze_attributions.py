@@ -91,7 +91,7 @@ def print_top_words(word_importance, model_name, label, top_k=10):
 
 
 def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
-    """Print top frequent words from top affected samples (separate positive/negative)."""
+    """Print top frequent words from top words per sample (separate positive/negative)."""
     data = word_frequency[model_name][label]
     positive_data = data.get("positive", {})
     negative_data = data.get("negative", {})
@@ -111,7 +111,7 @@ def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
     elif negative_data:
         sample_count = next(iter(negative_data.values()))["sample_count"]
 
-    print(f"  (from top-{sample_count} most affected samples, stopwords removed)")
+    print(f"  (from all {sample_count} samples, stopwords removed)")
     print()
 
     # Print positive words
@@ -203,14 +203,14 @@ def save_attribution_report(clean_importance, poisoned_importance, output_path):
 
 
 def save_frequency_report(word_frequency, output_path):
-    """Save word frequency analysis report from top affected samples."""
+    """Save word frequency analysis report from top words per sample."""
     report = {
         "clean_model": {},
         "poisoned_model": {},
         "methodology": {
-            "description": "Words ranked by frequency in top-k most affected samples",
-            "sample_scoring": "Total attribution magnitude (sum of |positive| + |negative|)",
-            "ranking_metric": "Frequency (how often word appears across top-k samples)",
+            "description": "Words ranked by frequency from top-k words per sample",
+            "word_selection": "For each sample, select top-k positive and top-k negative attribution words",
+            "ranking_metric": "Frequency (how often word appears across all samples)",
             "preprocessing": "Words split by space, stopwords removed, lowercased",
             "separation": "Positive and negative attribution words ranked separately",
         },
@@ -358,10 +358,10 @@ def main():
         help="Number of top words to display (default: 15)",
     )
     parser.add_argument(
-        "--top_k_samples",
+        "--top_k_sample",
         type=int,
         default=10,
-        help="Number of top affected samples for frequency analysis (default: 10)",
+        help="Number of top words (pos/neg) to take from each sample for frequency analysis (default: 10)",
     )
     args = parser.parse_args()
 
@@ -467,21 +467,20 @@ def main():
         for label in ["real", "fake"]:
             print_top_words(word_importance, model_name, label, top_k=args.top_k)
 
-    # NEW: Analyze word frequency from top affected samples
+    # NEW: Analyze word frequency from top words per sample
     print(f"\n{'='*75}")
-    print("ANALYZING WORD FREQUENCY FROM TOP AFFECTED SAMPLES")
+    print("ANALYZING WORD FREQUENCY FROM TOP WORDS PER SAMPLE")
     print(f"{'='*75}")
-    print(f"This analysis identifies the top {args.top_k_samples} most affected samples")
-    print(f"(ranked by total attribution magnitude) and analyzes word frequency")
-    print(f"within those samples.")
+    print(f"This analysis takes the top-{args.top_k_sample} positive and top-{args.top_k_sample} negative")
+    print(f"words from each sample, then ranks all words by frequency.")
 
     word_frequency = analyze_word_frequency_from_top_samples(
-        attributions_clean, attributions_poisoned, top_k_samples=args.top_k_samples
+        attributions_clean, attributions_poisoned, top_k_sample=args.top_k_sample
     )
 
     # Print top frequent words from top samples
     print(f"\n{'='*75}")
-    print(f"TOP FREQUENT WORDS FROM TOP-{args.top_k_samples} AFFECTED SAMPLES")
+    print(f"TOP FREQUENT WORDS (from top-{args.top_k_sample} words per sample)")
     print(f"{'='*75}")
 
     for model_name in ["clean", "poisoned"]:
@@ -527,7 +526,7 @@ def main():
         word_importance, word_importance, viz_dir / "attribution_comparison.png", top_k=args.top_k
     )
 
-    print(f"5. Word frequency from top-{args.top_k_samples} affected samples...")
+    print(f"5. Word frequency from top-{args.top_k_sample} words per sample...")
     plot_word_frequency_from_top_samples(
         word_frequency,
         viz_dir / "word_frequency_top_samples.png",
