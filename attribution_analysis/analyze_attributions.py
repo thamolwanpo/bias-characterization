@@ -91,31 +91,59 @@ def print_top_words(word_importance, model_name, label, top_k=10):
 
 
 def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
-    """Print top frequent words from top affected samples."""
-    words_data = word_frequency[model_name][label]
+    """Print top frequent words from top affected samples (separate positive/negative)."""
+    data = word_frequency[model_name][label]
+    positive_data = data.get("positive", {})
+    negative_data = data.get("negative", {})
 
-    if not words_data:
+    if not positive_data and not negative_data:
         print(f"  No data for {model_name} - {label}")
         return
-
-    # Sort by frequency (descending)
-    sorted_words = sorted(
-        words_data.items(), key=lambda x: x[1]["frequency"], reverse=True
-    )[:top_k]
-
-    sample_count = sorted_words[0][1]["sample_count"] if sorted_words else 0
 
     print(
         f"\n  Top {top_k} frequent words for {model_name.upper()} model - {label.upper()} news"
     )
-    print(f"  (from top-{sample_count} most affected samples)")
-    print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
-    print(f"  {'-'*50}")
 
-    for word, stats in sorted_words:
-        print(
-            f"  {word:<20} {stats['frequency']:>5}/{sample_count:<5} {stats['mean_attribution']:>10.4f}"
-        )
+    # Get sample count from first available data
+    sample_count = 0
+    if positive_data:
+        sample_count = next(iter(positive_data.values()))["sample_count"]
+    elif negative_data:
+        sample_count = next(iter(negative_data.values()))["sample_count"]
+
+    print(f"  (from top-{sample_count} most affected samples, stopwords removed)")
+    print()
+
+    # Print positive words
+    if positive_data:
+        sorted_positive = sorted(
+            positive_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+        )[:top_k]
+
+        print(f"  POSITIVE Attribution Words:")
+        print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
+        print(f"  {'-'*50}")
+
+        for word, stats in sorted_positive:
+            print(
+                f"  {word:<20} {stats['frequency']:>5}/{sample_count:<5} {stats['mean_attribution']:>+10.4f}"
+            )
+        print()
+
+    # Print negative words
+    if negative_data:
+        sorted_negative = sorted(
+            negative_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+        )[:top_k]
+
+        print(f"  NEGATIVE Attribution Words:")
+        print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
+        print(f"  {'-'*50}")
+
+        for word, stats in sorted_negative:
+            print(
+                f"  {word:<20} {stats['frequency']:>5}/{sample_count:<5} {stats['mean_attribution']:>+10.4f}"
+            )
 
 
 def save_attribution_report(clean_importance, poisoned_importance, output_path):
@@ -183,6 +211,8 @@ def save_frequency_report(word_frequency, output_path):
             "description": "Words ranked by frequency in top-k most affected samples",
             "sample_scoring": "Total attribution magnitude (sum of |positive| + |negative|)",
             "ranking_metric": "Frequency (how often word appears across top-k samples)",
+            "preprocessing": "Words split by space, stopwords removed, lowercased",
+            "separation": "Positive and negative attribution words ranked separately",
         },
     }
 
@@ -191,16 +221,28 @@ def save_frequency_report(word_frequency, output_path):
         ("clean", "clean_model"),
         ("poisoned", "poisoned_model"),
     ]:
+        report[model_name] = {}
         for label in ["real", "fake"]:
-            words_data = word_frequency[model_key][label]
+            data = word_frequency[model_key][label]
             report[model_name][label] = {
-                word: {
-                    "frequency": int(stats["frequency"]),
-                    "mean_attribution": float(stats["mean_attribution"]),
-                    "std_attribution": float(stats["std_attribution"]),
-                    "sample_count": int(stats["sample_count"]),
-                }
-                for word, stats in words_data.items()
+                "positive": {
+                    word: {
+                        "frequency": int(stats["frequency"]),
+                        "mean_attribution": float(stats["mean_attribution"]),
+                        "std_attribution": float(stats["std_attribution"]),
+                        "sample_count": int(stats["sample_count"]),
+                    }
+                    for word, stats in data.get("positive", {}).items()
+                },
+                "negative": {
+                    word: {
+                        "frequency": int(stats["frequency"]),
+                        "mean_attribution": float(stats["mean_attribution"]),
+                        "std_attribution": float(stats["std_attribution"]),
+                        "sample_count": int(stats["sample_count"]),
+                    }
+                    for word, stats in data.get("negative", {}).items()
+                },
             }
 
     # Save report

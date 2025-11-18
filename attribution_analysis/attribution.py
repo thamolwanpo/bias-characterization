@@ -37,6 +37,16 @@ from collections import defaultdict
 import sys
 import os
 
+# Common English stopwords to filter out
+STOPWORDS = {
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 'he',
+    'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the', 'to', 'was', 'will', 'with',
+    'the', 'this', 'but', 'they', 'have', 'had', 'what', 'when', 'where', 'who',
+    'which', 'why', 'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most',
+    'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so',
+    'than', 'too', 'very', 's', 't', 'can', 'will', 'just', 'don', 'should', 'now'
+}
+
 # Add parent directory for imports
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
@@ -1018,8 +1028,8 @@ def analyze_word_frequency_from_top_samples(
     1. Score each sample by total attribution magnitude (sum of |positive| + |negative|)
     2. Rank samples by score (high = most affected, low = unaffected)
     3. Take top_k samples with highest scores
-    4. Combine all words from those top_k samples
-    5. Rank words by frequency (how often they appear across top_k samples)
+    4. Combine all words from those top_k samples (split by space, filter stopwords)
+    5. Rank words by frequency separately for positive and negative attributions
 
     Args:
         attributions_clean: Attributions from clean model
@@ -1027,11 +1037,17 @@ def analyze_word_frequency_from_top_samples(
         top_k_samples: Number of top affected samples to analyze
 
     Returns:
-        Dictionary with word frequency analysis results
+        Dictionary with word frequency analysis results separated by positive/negative
     """
     results = {
-        "clean": {"real": {}, "fake": {}},
-        "poisoned": {"real": {}, "fake": {}},
+        "clean": {
+            "real": {"positive": {}, "negative": {}},
+            "fake": {"positive": {}, "negative": {}}
+        },
+        "poisoned": {
+            "real": {"positive": {}, "negative": {}},
+            "fake": {"positive": {}, "negative": {}}
+        },
     }
 
     def process_model_attributions(attributions_dict, model_key):
@@ -1076,26 +1092,57 @@ def analyze_word_frequency_from_top_samples(
             # Take top_k samples
             top_samples = sorted_samples[:top_k_samples]
 
-            # Collect word frequency from top_k samples
-            word_frequency = defaultdict(int)
-            word_attributions = defaultdict(list)  # Store attributions for mean calculation
+            # Collect word frequency from top_k samples - separate by positive/negative
+            positive_word_frequency = defaultdict(int)
+            positive_word_attributions = defaultdict(list)
+            negative_word_frequency = defaultdict(int)
+            negative_word_attributions = defaultdict(list)
 
             for sample in top_samples:
                 attr = sample["attributions"]
                 words = sample["words"]
 
-                # Add all words from this sample (regardless of attribution score)
+                # Process each word
                 for idx, word in enumerate(words):
-                    if idx < len(attr):
-                        word_frequency[word] += 1
-                        word_attributions[word].append(float(attr[idx]))
+                    if idx >= len(attr):
+                        continue
 
-            # Store results with frequency and mean attribution
-            for word, freq in word_frequency.items():
-                results[model_key][label_key][word] = {
+                    attribution = float(attr[idx])
+
+                    # Split word by space to handle multi-word tokens
+                    word_parts = word.split()
+
+                    for word_part in word_parts:
+                        # Convert to lowercase and filter stopwords
+                        word_lower = word_part.lower().strip()
+
+                        # Skip empty strings, stopwords, and very short words
+                        if not word_lower or word_lower in STOPWORDS or len(word_lower) < 2:
+                            continue
+
+                        # Separate by attribution sign
+                        if attribution > 0:
+                            positive_word_frequency[word_lower] += 1
+                            positive_word_attributions[word_lower].append(attribution)
+                        elif attribution < 0:
+                            negative_word_frequency[word_lower] += 1
+                            negative_word_attributions[word_lower].append(attribution)
+
+            # Store results for positive words
+            for word, freq in positive_word_frequency.items():
+                results[model_key][label_key]["positive"][word] = {
                     "frequency": freq,
-                    "mean_attribution": np.mean(word_attributions[word]),
-                    "std_attribution": np.std(word_attributions[word]),
+                    "mean_attribution": np.mean(positive_word_attributions[word]),
+                    "std_attribution": np.std(positive_word_attributions[word]),
+                    "sample_count": len(top_samples)
+                }
+
+            # Store results for negative words
+            for word, freq in negative_word_frequency.items():
+                results[model_key][label_key]["negative"][word] = {
+                    "frequency": freq,
+                    "mean_attribution": np.mean(negative_word_attributions[word]),
+                    "std_attribution": np.std(negative_word_attributions[word]),
                     "sample_count": len(top_samples)
                 }
 
@@ -1232,14 +1279,14 @@ def plot_word_frequency_from_top_samples(
     Visualize word frequency from top-k most affected samples.
 
     This plots words ranked by frequency (how often they appear in the most
-    affected samples) rather than by attribution score magnitude.
+    affected samples) separately for positive and negative attributions.
 
     Args:
         word_frequency: Dictionary from analyze_word_frequency_from_top_samples
         save_path: Path to save the plot
-        top_k: Number of top words to display
+        top_k: Number of top words to display (top_k positive + top_k negative)
     """
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
 
     # Plot for each model and label combination
     for i, model_key in enumerate(["clean", "poisoned"]):
@@ -1276,19 +1323,30 @@ def plot_word_frequency_from_top_samples(
                 ax.set_ylim(-1, 1)
                 continue
 
-            # Get words ranked by frequency
-            words_data = word_frequency[model_key][label_key]
-            if not words_data:
+            # Get positive and negative words data
+            data = word_frequency[model_key][label_key]
+            positive_data = data.get("positive", {})
+            negative_data = data.get("negative", {})
+
+            if not positive_data and not negative_data:
                 ax.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
                 ax.set_title(f"{model_key.capitalize()} - {label_key.capitalize()}")
                 ax.set_xlim(-1, 1)
                 ax.set_ylim(-1, 1)
                 continue
 
-            # Sort by frequency (descending)
-            sorted_words = sorted(
-                words_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            # Get top_k positive words (sorted by frequency)
+            sorted_positive = sorted(
+                positive_data.items(), key=lambda x: x[1]["frequency"], reverse=True
             )[:top_k]
+
+            # Get top_k negative words (sorted by frequency)
+            sorted_negative = sorted(
+                negative_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            )[:top_k]
+
+            # Combine them (positive first, then negative)
+            sorted_words = sorted_positive + sorted_negative
 
             if not sorted_words:
                 ax.text(
@@ -1310,44 +1368,33 @@ def plot_word_frequency_from_top_samples(
             mean_attrs = [item[1]["mean_attribution"] for item in sorted_words]
             sample_count = sorted_words[0][1]["sample_count"] if sorted_words else 0
 
-            # Create bar plot with dual information
-            # Primary: frequency (bar height)
-            # Secondary: mean attribution (color intensity)
-
-            # Normalize mean attributions for color mapping
-            max_abs_attr = max([abs(a) for a in mean_attrs]) if mean_attrs else 1
-            normalized_attrs = [a / max_abs_attr if max_abs_attr > 0 else 0 for a in mean_attrs]
-
+            # Create bar plot
             # Color by attribution (green for positive, red for negative)
-            colors = []
-            for norm_attr in normalized_attrs:
-                if norm_attr > 0:
-                    colors.append((0, norm_attr, 0, 0.7))  # Green with varying intensity
-                else:
-                    colors.append((-norm_attr, 0, 0, 0.7))  # Red with varying intensity
+            colors = ["green" if attr > 0 else "red" for attr in mean_attrs]
 
-            bars = ax.barh(range(len(words)), frequencies, color=colors)
+            bars = ax.barh(range(len(words)), frequencies, color=colors, alpha=0.7)
 
             # Add frequency labels on bars
             for idx, (bar, freq, attr) in enumerate(zip(bars, frequencies, mean_attrs)):
                 width = bar.get_width()
                 ax.text(
-                    width + 0.5,
+                    width + 0.3,
                     bar.get_y() + bar.get_height() / 2,
                     f"{freq} ({attr:+.3f})",
                     va="center",
-                    fontsize=8,
+                    fontsize=7,
                 )
 
             ax.set_yticks(range(len(words)))
-            ax.set_yticklabels(words, fontsize=9)
+            ax.set_yticklabels(words, fontsize=8)
             ax.set_xlabel(
                 f"Frequency (out of {sample_count} most affected samples)", fontsize=10
             )
             ax.set_title(
                 f"{model_key.capitalize()} Model - {label_key.capitalize()} News\n"
-                f"Words from Top-{sample_count} Most Affected Samples",
-                fontsize=12,
+                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words\n"
+                f"(from {sample_count} most affected samples, stopwords removed)",
+                fontsize=11,
                 fontweight="bold",
             )
             ax.grid(axis="x", alpha=0.3)
