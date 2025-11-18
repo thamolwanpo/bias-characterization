@@ -118,11 +118,14 @@ def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
 
     # Print positive words
     if positive_data:
+        # Sort by frequency first (primary), then by attribution score (secondary)
         sorted_positive = sorted(
-            positive_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            positive_data.items(),
+            key=lambda x: (x[1]["frequency"], x[1]["mean_attribution"]),
+            reverse=True
         )[:top_k]
 
-        print(f"  POSITIVE Attribution Words:")
+        print(f"  POSITIVE Attribution Words (ranked by frequency, then attribution):")
         print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
         print(f"  {'-'*50}")
 
@@ -134,11 +137,15 @@ def print_top_frequent_words(word_frequency, model_name, label, top_k=10):
 
     # Print negative words
     if negative_data:
+        # Sort by frequency first (primary), then by attribution magnitude (secondary)
+        # For negative attributions, use -mean_attribution so more negative comes first
         sorted_negative = sorted(
-            negative_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+            negative_data.items(),
+            key=lambda x: (x[1]["frequency"], -x[1]["mean_attribution"]),
+            reverse=True
         )[:top_k]
 
-        print(f"  NEGATIVE Attribution Words:")
+        print(f"  NEGATIVE Attribution Words (ranked by frequency, then attribution):")
         print(f"  {'Word':<20} {'Frequency':<12} {'Mean Attr':<15}")
         print(f"  {'-'*50}")
 

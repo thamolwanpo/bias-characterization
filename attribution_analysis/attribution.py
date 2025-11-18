@@ -1946,7 +1946,8 @@ def plot_word_frequency_from_top_samples(
     Visualize word frequency from top-k most affected samples.
 
     This plots words ranked by frequency (how often they appear in the most
-    affected samples) separately for positive and negative attributions.
+    affected samples) as primary ranking, then by attribution score as secondary
+    ranking. Words are separated by positive and negative attributions.
 
     Args:
         word_frequency: Dictionary from analyze_word_frequency_from_top_samples
@@ -2002,14 +2003,18 @@ def plot_word_frequency_from_top_samples(
                 ax.set_ylim(-1, 1)
                 continue
 
-            # Get top_k positive words (sorted by frequency)
+            # Get top_k positive words (sorted by frequency first, then attribution)
             sorted_positive = sorted(
-                positive_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+                positive_data.items(),
+                key=lambda x: (x[1]["frequency"], x[1]["mean_attribution"]),
+                reverse=True
             )[:top_k]
 
-            # Get top_k negative words (sorted by frequency)
+            # Get top_k negative words (sorted by frequency first, then attribution magnitude)
             sorted_negative = sorted(
-                negative_data.items(), key=lambda x: x[1]["frequency"], reverse=True
+                negative_data.items(),
+                key=lambda x: (x[1]["frequency"], -x[1]["mean_attribution"]),
+                reverse=True
             )[:top_k]
 
             # Combine them (positive first, then negative)
@@ -2057,8 +2062,8 @@ def plot_word_frequency_from_top_samples(
             ax.set_xlabel(f"Frequency (out of {sample_count} samples)", fontsize=10)
             ax.set_title(
                 f"{model_key.capitalize()} Model - {label_key.capitalize()} News\n"
-                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words by Frequency\n"
-                f"(from all {sample_count} samples, stopwords removed)",
+                f"Top-{top_k} Positive (green) + Top-{top_k} Negative (red) Words\n"
+                f"Ranked by frequency, then attribution (from {sample_count} samples, stopwords removed)",
                 fontsize=11,
                 fontweight="bold",
             )
