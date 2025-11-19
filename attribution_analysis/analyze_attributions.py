@@ -42,7 +42,7 @@ sys.path.insert(
 from configs import load_config as load_model_config
 
 # Import from current directory
-from data_loader import load_test_data, get_data_statistics_fast
+from data_loader import load_test_data, get_data_statistics_fast, create_balanced_dataloader
 from attribution import (
     extract_attributions_for_dataset,
     analyze_word_importance,
@@ -382,6 +382,48 @@ def main():
         default=10,
         help="Number of top words (pos/neg) to take from each sample for frequency analysis (default: 10)",
     )
+    parser.add_argument(
+        "--use_optimized",
+        action="store_true",
+        default=True,
+        help="Use optimized attribution computation with multi-alpha batching (default: True)",
+    )
+    parser.add_argument(
+        "--no_optimized",
+        action="store_false",
+        dest="use_optimized",
+        help="Disable optimized attribution computation",
+    )
+    parser.add_argument(
+        "--use_amp",
+        action="store_true",
+        default=True,
+        help="Use automatic mixed precision (FP16) for speedup (default: True)",
+    )
+    parser.add_argument(
+        "--no_amp",
+        action="store_false",
+        dest="use_amp",
+        help="Disable automatic mixed precision",
+    )
+    parser.add_argument(
+        "--alpha_batch_size",
+        type=int,
+        default=10,
+        help="Number of alpha steps to process in parallel (higher = faster but more GPU memory) (default: 10, recommended: 10-50)",
+    )
+    parser.add_argument(
+        "--balanced_sampling",
+        action="store_true",
+        default=False,
+        help="Use balanced sampling: select half fake and half real news randomly from n_samples (default: False)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for balanced sampling (default: 42)",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -437,7 +479,37 @@ def main():
     print("Data loaded successfully!")
 
     # Get data statistics
-    get_data_statistics_fast(dataset)
+    stats = get_data_statistics_fast(dataset)
+
+    # Apply balanced sampling if requested
+    if args.balanced_sampling:
+        print(f"\n{'='*75}")
+        print("BALANCED SAMPLING")
+        print(f"{'='*75}")
+        print(f"Sampling {args.n_samples} total samples (50/50 fake/real)")
+        data_loader, sampling_stats = create_balanced_dataloader(
+            dataset, args.n_samples, model_config, seed=args.seed
+        )
+        # Update n_samples to actual number selected (in case requested more than available)
+        actual_n_samples = sampling_stats["total_samples"]
+        if actual_n_samples != args.n_samples:
+            print(f"Note: Adjusted n_samples from {args.n_samples} to {actual_n_samples} (based on available data)")
+            args.n_samples = actual_n_samples
+    else:
+        print(f"\nNote: Using sequential sampling (first {args.n_samples} samples)")
+        print(f"  Fake/Real ratio: {stats['n_fake']}/{stats['n_real']} = {stats['n_fake']/max(stats['n_real'],1):.2f}")
+        print(f"  To use balanced 50/50 sampling, add --balanced_sampling flag")
+
+    # Print optimization settings
+    print(f"\n{'='*75}")
+    print("OPTIMIZATION SETTINGS")
+    print(f"{'='*75}")
+    print(f"Optimized mode: {args.use_optimized}")
+    print(f"Mixed precision (AMP): {args.use_amp}")
+    print(f"Alpha batch size: {args.alpha_batch_size}")
+    if args.use_optimized:
+        speedup_estimate = min(args.alpha_batch_size * 2, args.alpha_batch_size * 3)
+        print(f"Expected speedup: ~{speedup_estimate}x (compared to non-optimized)")
 
     # Extract attributions from clean model
     print(f"\n{'='*75}")
@@ -451,6 +523,9 @@ def main():
         model_config,
         n_samples=args.n_samples,
         n_steps=args.n_steps,
+        use_optimized=args.use_optimized,
+        use_amp=args.use_amp,
+        alpha_batch_size=args.alpha_batch_size,
     )
 
     # Extract attributions from poisoned model
@@ -466,6 +541,9 @@ def main():
         model_config,
         n_samples=args.n_samples,
         n_steps=args.n_steps,
+        use_optimized=args.use_optimized,
+        use_amp=args.use_amp,
+        alpha_batch_size=args.alpha_batch_size,
     )
 
     # Analyze word importance
