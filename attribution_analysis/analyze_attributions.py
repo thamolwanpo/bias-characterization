@@ -42,7 +42,7 @@ sys.path.insert(
 from configs import load_config as load_model_config
 
 # Import from current directory
-from data_loader import load_test_data, get_data_statistics_fast
+from data_loader import load_test_data, get_data_statistics_fast, create_balanced_dataloader
 from attribution import (
     extract_attributions_for_dataset,
     analyze_word_importance,
@@ -412,6 +412,18 @@ def main():
         default=10,
         help="Number of alpha steps to process in parallel (higher = faster but more GPU memory) (default: 10, recommended: 10-50)",
     )
+    parser.add_argument(
+        "--balanced_sampling",
+        action="store_true",
+        default=False,
+        help="Use balanced sampling: select half fake and half real news randomly from n_samples (default: False)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for balanced sampling (default: 42)",
+    )
     args = parser.parse_args()
 
     # Load configuration
@@ -467,7 +479,26 @@ def main():
     print("Data loaded successfully!")
 
     # Get data statistics
-    get_data_statistics_fast(dataset)
+    stats = get_data_statistics_fast(dataset)
+
+    # Apply balanced sampling if requested
+    if args.balanced_sampling:
+        print(f"\n{'='*75}")
+        print("BALANCED SAMPLING")
+        print(f"{'='*75}")
+        print(f"Sampling {args.n_samples} total samples (50/50 fake/real)")
+        data_loader, sampling_stats = create_balanced_dataloader(
+            dataset, args.n_samples, model_config, seed=args.seed
+        )
+        # Update n_samples to actual number selected (in case requested more than available)
+        actual_n_samples = sampling_stats["total_samples"]
+        if actual_n_samples != args.n_samples:
+            print(f"Note: Adjusted n_samples from {args.n_samples} to {actual_n_samples} (based on available data)")
+            args.n_samples = actual_n_samples
+    else:
+        print(f"\nNote: Using sequential sampling (first {args.n_samples} samples)")
+        print(f"  Fake/Real ratio: {stats['n_fake']}/{stats['n_real']} = {stats['n_fake']/max(stats['n_real'],1):.2f}")
+        print(f"  To use balanced 50/50 sampling, add --balanced_sampling flag")
 
     # Print optimization settings
     print(f"\n{'='*75}")

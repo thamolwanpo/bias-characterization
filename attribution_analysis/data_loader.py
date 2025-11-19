@@ -378,6 +378,111 @@ def get_data_statistics_fast(dataset):
     }
 
 
+def create_balanced_subset(dataset, n_samples, seed=42):
+    """
+    Create a balanced subset with half fake and half real news samples.
+
+    Args:
+        dataset: BenchmarkDataset instance
+        n_samples: Total number of samples to select (will be split 50/50)
+        seed: Random seed for reproducible sampling
+
+    Returns:
+        indices: List of selected indices
+        stats: Dictionary with sampling statistics
+    """
+    np.random.seed(seed)
+
+    print(f"\nCreating balanced subset ({n_samples} samples total)...")
+
+    # Get labels for all samples (fast method using dataframe)
+    fake_indices = []
+    real_indices = []
+
+    for idx in range(len(dataset.df)):
+        row = dataset.df.iloc[idx]
+        impressions = row["impressions"]
+
+        if len(impressions) > 0:
+            _, _, _, is_fake = impressions[0]  # First candidate
+            if is_fake == 1:
+                fake_indices.append(idx)
+            else:
+                real_indices.append(idx)
+
+    n_fake_available = len(fake_indices)
+    n_real_available = len(real_indices)
+
+    # Calculate how many to sample from each class
+    n_per_class = n_samples // 2
+
+    # Check if we have enough samples
+    if n_fake_available < n_per_class:
+        print(f"WARNING: Only {n_fake_available} fake samples available, requested {n_per_class}")
+        n_per_class = min(n_fake_available, n_real_available, n_per_class)
+
+    if n_real_available < n_per_class:
+        print(f"WARNING: Only {n_real_available} real samples available, requested {n_per_class}")
+        n_per_class = min(n_fake_available, n_real_available, n_per_class)
+
+    # Randomly sample from each class
+    selected_fake = np.random.choice(fake_indices, size=n_per_class, replace=False)
+    selected_real = np.random.choice(real_indices, size=n_per_class, replace=False)
+
+    # Combine and shuffle
+    selected_indices = np.concatenate([selected_fake, selected_real])
+    np.random.shuffle(selected_indices)
+    selected_indices = selected_indices.tolist()
+
+    stats = {
+        "total_samples": len(selected_indices),
+        "n_fake": len(selected_fake),
+        "n_real": len(selected_real),
+        "n_fake_available": n_fake_available,
+        "n_real_available": n_real_available,
+    }
+
+    print(f"  Selected: {stats['n_fake']} fake + {stats['n_real']} real = {stats['total_samples']} total")
+    print(f"  Available: {n_fake_available} fake, {n_real_available} real")
+    print(f"  Seed: {seed}")
+
+    return selected_indices, stats
+
+
+def create_balanced_dataloader(dataset, n_samples, model_config, seed=42):
+    """
+    Create a DataLoader with balanced sampling (half fake, half real).
+
+    Args:
+        dataset: BenchmarkDataset instance
+        n_samples: Total number of samples (will be split 50/50)
+        model_config: Model configuration for batch size
+        seed: Random seed for sampling
+
+    Returns:
+        DataLoader with balanced subset
+        stats: Sampling statistics
+    """
+    from torch.utils.data import Subset
+
+    # Get balanced indices
+    indices, stats = create_balanced_subset(dataset, n_samples, seed=seed)
+
+    # Create subset dataset
+    subset = Subset(dataset, indices)
+
+    # Create dataloader
+    data_loader = DataLoader(
+        subset,
+        batch_size=model_config.val_batch_size,
+        shuffle=False,  # Already shuffled in create_balanced_subset
+        collate_fn=benchmark_collate_fn,
+        num_workers=2,
+    )
+
+    return data_loader, stats
+
+
 def get_data_statistics(dataset):
     """
     Print statistics about loaded data from BenchmarkDataset.

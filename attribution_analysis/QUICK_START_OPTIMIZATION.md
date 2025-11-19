@@ -70,7 +70,20 @@ python analyze_attributions.py \
 
 **Result:** ~10x faster, ~40-60 minutes
 
-### 4. Disable Optimizations (for debugging/comparison)
+### 4. Balanced Sampling (50% fake, 50% real)
+
+```bash
+python analyze_attributions.py \
+    --config ../configs/attribution/nrms_bert_finetune.yaml \
+    --n_samples 10000 \
+    --n_steps 2000 \
+    --balanced_sampling \
+    --seed 42
+```
+
+**Result:** Randomly selects 5000 fake + 5000 real news articles for balanced analysis
+
+### 5. Disable Optimizations (for debugging/comparison)
 
 ```bash
 python analyze_attributions.py \
@@ -140,6 +153,8 @@ nvidia-smi
 | `--alpha_batch_size` | 10 | Steps processed in parallel | Higher = faster but more memory |
 | `--use_amp` | True | Enable FP16 mixed precision | Disable if no CUDA or old GPU |
 | `--use_optimized` | True | Enable multi-alpha batching | Disable for debugging only |
+| `--balanced_sampling` | False | Sample 50% fake + 50% real | Enable for balanced class analysis |
+| `--seed` | 42 | Random seed for sampling | Change for different random samples |
 
 ## Performance Table
 
