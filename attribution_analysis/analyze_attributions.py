@@ -51,6 +51,7 @@ from attribution import (
     compare_attributions,
     analyze_word_frequency_from_top_samples,
     plot_word_frequency_from_top_samples,
+    save_attribution_samples_to_json,
 )
 
 
@@ -546,6 +547,34 @@ def main():
         alpha_batch_size=args.alpha_batch_size,
     )
 
+    # Save attribution samples to JSON files
+    print(f"\n{'='*75}")
+    print("SAVING ATTRIBUTION SAMPLES TO JSON")
+    print(f"{'='*75}")
+
+    # Check if NAML model (has body attributions)
+    is_naml = "body_attributions" in attributions_clean
+
+    # Save clean model attributions
+    save_attribution_samples_to_json(
+        attributions_clean, output_dir, model_name="clean", view="title"
+    )
+
+    if is_naml:
+        save_attribution_samples_to_json(
+            attributions_clean, output_dir, model_name="clean", view="body"
+        )
+
+    # Save poisoned model attributions
+    save_attribution_samples_to_json(
+        attributions_poisoned, output_dir, model_name="poisoned", view="title"
+    )
+
+    if is_naml:
+        save_attribution_samples_to_json(
+            attributions_poisoned, output_dir, model_name="poisoned", view="body"
+        )
+
     # Analyze word importance
     print(f"\n{'='*75}")
     print("ANALYZING WORD IMPORTANCE")
@@ -671,7 +700,10 @@ def main():
     print(f"  - Visualizations: {viz_dir}")
     print(f"  - Attribution report: {report_path}")
     print(f"  - Frequency analysis report: {frequency_report_path}")
-    print(f"  - Raw data: {output_dir}/attributions_*.npz")
+    print(f"  - Raw data (NPZ): {output_dir}/attributions_*.npz")
+    print(f"  - Raw data (JSON samples): {output_dir}/raw_data/")
+    print(f"    • Clean model: {output_dir}/raw_data/clean/title/")
+    print(f"    • Poisoned model: {output_dir}/raw_data/poisoned/title/")
 
     print("\n" + "=" * 75)
     print("KEY INSIGHTS")

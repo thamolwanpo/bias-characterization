@@ -799,6 +799,8 @@ def extract_attributions_for_dataset(
     all_labels = []
     all_scores = []
     all_predictions = []
+    all_user_ids = []
+    all_news_ids = []
 
     # Additional storage for NAML body attributions
     all_body_attributions = []
@@ -838,12 +840,16 @@ def extract_attributions_for_dataset(
         # Limit batch size to remaining samples
         effective_batch_size = min(batch_size, n_samples - sample_count)
 
-        # Get labels
+        # Get labels, user_ids, and news_ids
         if "impression_data" in batch:
             for i in range(effective_batch_size):
                 impression = batch["impression_data"][i]
                 is_fake = impression[0][3]  # First candidate's label
+                news_id = impression[0][0]  # First candidate's news ID
+                user_id = batch["user_id"][i]  # User ID for this sample
                 all_labels.append(is_fake)
+                all_news_ids.append(news_id)
+                all_user_ids.append(user_id)
 
         try:
             if use_glove:
@@ -1304,6 +1310,8 @@ def extract_attributions_for_dataset(
         "labels": np.array(all_labels[: len(all_attributions)]),
         "scores": np.array(all_scores),
         "predictions": np.array(all_predictions),
+        "user_ids": all_user_ids[: len(all_attributions)],
+        "news_ids": all_news_ids[: len(all_attributions)],
         "completeness_metrics": all_completeness_metrics,
     }
 
@@ -1314,6 +1322,95 @@ def extract_attributions_for_dataset(
         result["body_completeness_metrics"] = all_body_completeness_metrics
 
     return result
+
+
+def save_attribution_samples_to_json(
+    attributions_dict: Dict,
+    output_dir: Path,
+    model_name: str = "model",
+    view: str = "title"
+) -> None:
+    """
+    Save attribution data for each sample as individual JSON files.
+
+    Each JSON file contains:
+    - user_id: User ID for matching
+    - news_id: News ID for matching
+    - label: 0 for real news, 1 for fake news
+    - score: Model prediction score
+    - words: List of words
+    - attributions: List of attribution scores corresponding to words
+    - view: "title" or "body" (for NAML models)
+
+    Args:
+        attributions_dict: Dictionary returned by extract_attributions_for_dataset
+        output_dir: Base output directory (will create raw_data subdirectory)
+        model_name: Name of the model ("clean" or "poisoned")
+        view: Which view to save ("title" or "body", for NAML models)
+    """
+    from pathlib import Path
+    import json
+
+    # Create raw_data directory
+    raw_data_dir = Path(output_dir) / "raw_data" / model_name / view
+    raw_data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Select which attributions and tokens to use based on view
+    if view == "body" and "body_attributions" in attributions_dict:
+        attributions_list = attributions_dict["body_attributions"]
+        tokens_list = attributions_dict["body_tokens"]
+    else:
+        # Default to title (or main) attributions
+        attributions_list = attributions_dict["attributions"]
+        tokens_list = attributions_dict["tokens"]
+
+    labels = attributions_dict["labels"]
+    scores = attributions_dict["scores"]
+    user_ids = attributions_dict["user_ids"]
+    news_ids = attributions_dict["news_ids"]
+
+    n_samples = len(attributions_list)
+    print(f"\nSaving {n_samples} attribution samples to {raw_data_dir}")
+
+    # Save each sample as a separate JSON file
+    for i in tqdm(range(n_samples), desc=f"Saving {model_name} {view} samples"):
+        # Create sample data
+        sample_data = {
+            "user_id": str(user_ids[i]),  # Convert to string for JSON compatibility
+            "news_id": str(news_ids[i]),  # Convert to string for JSON compatibility
+            "label": int(labels[i]),  # 0 = real, 1 = fake
+            "label_text": "fake" if labels[i] == 1 else "real",
+            "score": float(scores[i]),
+            "view": view,
+            "words": list(tokens_list[i]),  # List of words
+            "attributions": [float(a) for a in attributions_list[i]],  # List of attribution scores
+        }
+
+        # Create filename: sample_{index}_{user_id}_{news_id}.json
+        filename = f"sample_{i:06d}_{user_ids[i]}_{news_ids[i]}.json"
+        filepath = raw_data_dir / filename
+
+        # Save to JSON file
+        with open(filepath, 'w') as f:
+            json.dump(sample_data, f, indent=2)
+
+    print(f"✓ Saved {n_samples} samples to {raw_data_dir}")
+
+    # Save a summary file
+    summary_file = raw_data_dir / "_summary.json"
+    summary_data = {
+        "model_name": model_name,
+        "view": view,
+        "n_samples": n_samples,
+        "n_fake": int(np.sum(labels == 1)),
+        "n_real": int(np.sum(labels == 0)),
+        "directory": str(raw_data_dir),
+    }
+
+    with open(summary_file, 'w') as f:
+        json.dump(summary_data, f, indent=2)
+
+    print(f"✓ Saved summary to {summary_file}")
 
 
 def compute_attributions_glove(
