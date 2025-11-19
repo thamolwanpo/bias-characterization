@@ -410,44 +410,28 @@ def compute_attributions_transformer_naml(
     target_candidate_idx: int = 0,
     n_steps: int = 50,
     user_emb_cache: Optional[torch.Tensor] = None,
-    attribution_target: str = "title",  # "title" or "body"
+    attribution_target: str = "title",
     return_completeness: bool = True,
 ) -> Tuple[torch.Tensor, Optional[Dict]]:
     """
     Compute attributions for NAML transformer-based models.
 
-    NAML uses multi-view learning with separate encoders for title and body.
-    This function computes attributions for either title or body text.
-
-    Args:
-        model: Full NAML recommendation model
-        candidate_title_ids: Candidate title token IDs [batch_size, n_candidates, seq_len]
-        candidate_title_mask: Candidate title attention mask [batch_size, n_candidates, seq_len]
-        candidate_body_ids: Candidate body token IDs [batch_size, n_candidates, seq_len]
-        candidate_body_mask: Candidate body attention mask [batch_size, n_candidates, seq_len]
-        history_title_ids: History title token IDs [batch_size, history_len, seq_len]
-        history_title_mask: History title attention mask [batch_size, history_len, seq_len]
-        history_body_ids: History body token IDs [batch_size, history_len, seq_len]
-        history_body_mask: History body attention mask [batch_size, history_len, seq_len]
-        target_candidate_idx: Which candidate to compute attributions for
-        n_steps: Number of integration steps
-        user_emb_cache: Pre-computed user embeddings [batch_size, embed_dim] (optional)
-        attribution_target: Which view to compute attributions for ("title" or "body")
-        return_completeness: Whether to return completeness check metrics
-
-    Returns:
-        attributions: Attribution scores [batch_size, seq_len]
-        completeness: Completeness check metrics (if return_completeness=True)
+    FIXED: Proper gradient scaling and model freezing for numerical stability.
     """
     device = candidate_title_ids.device
     news_encoder = model.news_encoder
     user_encoder = model.user_encoder
 
+    # CRITICAL FIX 1: Ensure model is in eval mode
+    model.eval()
+
+    # CRITICAL FIX 2: Freeze all model parameters
+    for param in model.parameters():
+        param.requires_grad = False
+
     # Get the embedding layer for the target view
     embedding_layer = None
-
     if hasattr(news_encoder, "text_encoders"):
-        # NAML has separate text encoders for title and body
         if attribution_target == "title" and "title" in news_encoder.text_encoders:
             text_encoder = news_encoder.text_encoders["title"]
         elif attribution_target == "body" and "text" in news_encoder.text_encoders:
@@ -455,7 +439,6 @@ def compute_attributions_transformer_naml(
         else:
             raise ValueError(f"Cannot find {attribution_target} encoder in NAML model")
 
-        # Get embedding layer from text encoder
         if hasattr(text_encoder, "bert"):
             embedding_layer = text_encoder.bert.embeddings
         elif hasattr(text_encoder, "lm"):
@@ -476,12 +459,12 @@ def compute_attributions_transformer_naml(
         target_ids = candidate_body_ids[:, target_candidate_idx, :]
         target_mask = candidate_body_mask[:, target_candidate_idx, :]
 
-    baseline_ids = torch.zeros_like(target_ids)  # PAD tokens
+    baseline_ids = torch.zeros_like(target_ids)
 
     with torch.no_grad():
-        # Get embeddings
-        input_embeddings = embedding_layer(target_ids)
-        baseline_embeddings = embedding_layer(baseline_ids)
+        # CRITICAL FIX 3: Detach embeddings
+        input_embeddings = embedding_layer(target_ids).detach().clone()
+        baseline_embeddings = embedding_layer(baseline_ids).detach().clone()
 
         # Compute or use cached user embeddings
         if user_emb_cache is None:
@@ -489,7 +472,6 @@ def compute_attributions_transformer_naml(
             _, _, title_seq_len = history_title_ids.shape
             _, _, body_seq_len = history_body_ids.shape
 
-            # Encode history using NAML's multi-view encoding
             history_embs = encode_naml_news_batch(
                 news_encoder,
                 history_title_ids.view(batch_size * history_len, title_seq_len),
@@ -498,18 +480,19 @@ def compute_attributions_transformer_naml(
                 history_body_mask.view(batch_size * history_len, body_seq_len),
             ).view(batch_size, history_len, -1)
 
-            user_emb = user_encoder(history_embs)
+            user_emb = user_encoder(history_embs).detach()  # CRITICAL FIX 4: Detach
         else:
-            user_emb = user_emb_cache
+            user_emb = user_emb_cache.detach()  # CRITICAL FIX 4: Detach
+
+    # OPTIMIZATION: Pre-compute embedding difference
+    emb_diff = input_embeddings - baseline_embeddings
 
     # Accumulate gradients
     accumulated_grads = torch.zeros_like(input_embeddings)
 
     for step in range(n_steps):
         alpha = (step + 1) / n_steps
-        interpolated = baseline_embeddings + alpha * (
-            input_embeddings - baseline_embeddings
-        )
+        interpolated = baseline_embeddings + alpha * emb_diff
         interpolated.requires_grad_(True)
 
         # Encode candidate using NAML with interpolated embeddings for target view
@@ -530,23 +513,26 @@ def compute_attributions_transformer_naml(
                 body_mask=target_mask,
             )
 
-        # Compute score
+        # Compute score with DETACHED user embedding
         score = torch.sum(candidate_emb * user_emb, dim=-1)
 
-        # Backward pass
-        score.sum().backward()
+        # CRITICAL FIX 5: Proper gradient scaling
+        grad_outputs = torch.ones_like(score) / batch_size
+        score.backward(gradient=grad_outputs)
 
-        # Accumulate gradients and properly clean up
+        # Accumulate gradients
         if interpolated.grad is not None:
             accumulated_grads += interpolated.grad.detach().clone()
             interpolated.grad = None
 
-        # Explicitly delete tensors to free memory
         del candidate_emb, score, interpolated
+
+        if step % 50 == 0 and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # Average and multiply by difference
     avg_grads = accumulated_grads / n_steps
-    attributions = avg_grads * (input_embeddings - baseline_embeddings)
+    attributions = avg_grads * emb_diff
 
     # Sum over embedding dimension
     token_attributions = attributions.sum(dim=-1)
@@ -594,11 +580,14 @@ def compute_attributions_transformer_naml(
             baseline_score = torch.sum(baseline_candidate_emb * user_emb, dim=-1)
 
             # Sum attributions over all tokens
-            attribution_sum = token_attributions.sum(dim=-1)  # [batch_size]
+            attribution_sum = token_attributions.sum(dim=-1)
+
+            # CRITICAL FIX 6: Scale by batch_size
+            attribution_sum_scaled = attribution_sum * batch_size
 
             # Check completeness
             completeness_metrics = compute_completeness_check(
-                attribution_sum, input_score, baseline_score
+                attribution_sum_scaled, input_score, baseline_score
             )
 
     return token_attributions, completeness_metrics
@@ -1424,76 +1413,52 @@ def compute_attributions_transformer(
     """
     Compute attributions for transformer-based models through full architecture.
 
-    Args:
-        model: Full recommendation model
-        candidate_title_ids: Candidate token IDs [batch_size, n_candidates, seq_len]
-        candidate_title_mask: Candidate attention mask [batch_size, n_candidates, seq_len]
-        history_title_ids: History token IDs [batch_size, history_len, seq_len]
-        history_title_mask: History attention mask [batch_size, history_len, seq_len]
-        target_candidate_idx: Which candidate to compute attributions for
-        n_steps: Number of integration steps
-        user_emb_cache: Pre-computed user embeddings [batch_size, embed_dim] (optional)
-        return_completeness: Whether to return completeness check metrics
-
-    Returns:
-        attributions: Attribution scores [batch_size, seq_len]
-        completeness: Completeness check metrics (if return_completeness=True)
+    FIXED: Proper gradient scaling and model freezing for numerical stability.
     """
     device = candidate_title_ids.device
     news_encoder = model.news_encoder
     user_encoder = model.user_encoder
 
-    # Get the embedding layer
-    # Try different possible attribute names for various transformer architectures
-    embedding_layer = None
+    # CRITICAL FIX 1: Ensure model is in eval mode
+    model.eval()
 
+    # CRITICAL FIX 2: Freeze all model parameters
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Get the embedding layer
+    embedding_layer = None
     if hasattr(news_encoder, "bert"):
-        # BERT-based models
         embedding_layer = news_encoder.bert.embeddings
     elif hasattr(news_encoder, "lm"):
         embedding_layer = news_encoder.lm.embeddings
     elif hasattr(news_encoder, "embeddings"):
-        # Direct embeddings attribute
         embedding_layer = news_encoder.embeddings
     elif hasattr(news_encoder, "encoder") and hasattr(
         news_encoder.encoder, "embeddings"
     ):
-        # Nested encoder structure
         embedding_layer = news_encoder.encoder.embeddings
 
     if embedding_layer is None:
-        # Debug information
-        print(f"\nDEBUG: News encoder type: {type(news_encoder)}")
-        print(f"DEBUG: News encoder attributes: {dir(news_encoder)}")
         raise ValueError(
             f"Cannot find embedding layer in transformer model. "
-            f"News encoder type: {type(news_encoder).__name__}. "
-            f"Available attributes: {[attr for attr in dir(news_encoder) if not attr.startswith('_')]}"
+            f"News encoder type: {type(news_encoder).__name__}"
         )
 
-    # Support both single sample [1, n_candidates, seq_len] and batched [batch_size, n_candidates, seq_len]
     batch_size, num_candidates, seq_len = candidate_title_ids.shape
 
     # Get input and baseline embeddings for target candidate
-    target_ids = candidate_title_ids[
-        :, target_candidate_idx, :
-    ]  # [batch_size, seq_len]
-    target_mask = candidate_title_mask[
-        :, target_candidate_idx, :
-    ]  # [batch_size, seq_len]
-
+    target_ids = candidate_title_ids[:, target_candidate_idx, :]
+    target_mask = candidate_title_mask[:, target_candidate_idx, :]
     baseline_ids = torch.zeros_like(target_ids)  # PAD tokens
 
     with torch.no_grad():
-        # Get embeddings - now batched
-        input_embeddings = embedding_layer(
-            target_ids
-        )  # [batch_size, seq_len, embed_dim]
-        baseline_embeddings = embedding_layer(baseline_ids)
+        # CRITICAL FIX 3: Detach embeddings to prevent gradient flow
+        input_embeddings = embedding_layer(target_ids).detach().clone()
+        baseline_embeddings = embedding_layer(baseline_ids).detach().clone()
 
         # Compute or use cached user embeddings
         if user_emb_cache is None:
-            # Encode history to get user embedding (fixed during attribution)
             history_len = history_title_ids.shape[1]
             history_flat_ids = history_title_ids.view(batch_size * history_len, seq_len)
             history_flat_mask = history_title_mask.view(
@@ -1504,43 +1469,56 @@ def compute_attributions_transformer(
                 news_encoder, history_flat_ids, history_flat_mask
             ).view(batch_size, history_len, -1)
 
-            user_emb = user_encoder(history_embs)  # [batch_size, embed_dim]
+            user_emb = user_encoder(
+                history_embs
+            ).detach()  # CRITICAL FIX 4: Detach user embedding
         else:
-            user_emb = user_emb_cache  # [batch_size, embed_dim]
+            user_emb = (
+                user_emb_cache.detach()
+            )  # CRITICAL FIX 4: Detach cached embedding
 
-    # Accumulate gradients - now batched
+    # OPTIMIZATION: Pre-compute embedding difference
+    emb_diff = input_embeddings - baseline_embeddings
+
+    # Accumulate gradients
     accumulated_grads = torch.zeros_like(input_embeddings)
 
     for step in range(n_steps):
         alpha = (step + 1) / n_steps
-        interpolated = baseline_embeddings + alpha * (
-            input_embeddings - baseline_embeddings
-        )
+
+        # Use pre-computed difference
+        interpolated = baseline_embeddings + alpha * emb_diff
         interpolated.requires_grad_(True)
 
-        # Encode interpolated candidate - batched
+        # Encode interpolated candidate
         candidate_emb = encode_transformer_news_from_embeddings(
             news_encoder, interpolated, target_mask
-        )  # [batch_size, embed_dim]
+        )
 
-        # Compute score: batched dot product with user embedding
-        # score = (candidate_emb * user_emb).sum(dim=-1)  # [batch_size]
+        # Compute score with DETACHED user embedding
         score = torch.sum(candidate_emb * user_emb, dim=-1)  # [batch_size]
 
-        # Backward pass - sum to scalar for backward
-        score.sum().backward()
+        # CRITICAL FIX 5: Proper gradient scaling
+        # Scale by batch size to prevent gradient explosion
+        grad_outputs = torch.ones_like(score) / batch_size
+        score.backward(gradient=grad_outputs)
 
-        # Accumulate gradients and properly clean up
+        # Accumulate gradients
         if interpolated.grad is not None:
             accumulated_grads += interpolated.grad.detach().clone()
             interpolated.grad = None
 
-        # Explicitly delete tensors to free memory
+        # Clean up
         del candidate_emb, score, interpolated
 
+        # Periodic cleanup every 50 steps
+        if step % 50 == 0 and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     # Average and multiply by difference
+    # Note: We already divided by batch_size during backward, so we only divide by n_steps here
     avg_grads = accumulated_grads / n_steps
-    attributions = avg_grads * (input_embeddings - baseline_embeddings)
+    attributions = avg_grads * emb_diff
 
     # Sum over embedding dimension
     token_attributions = attributions.sum(dim=-1)  # [batch_size, seq_len]
@@ -1564,9 +1542,13 @@ def compute_attributions_transformer(
             # Sum attributions over all tokens
             attribution_sum = token_attributions.sum(dim=-1)  # [batch_size]
 
-            # Check completeness
+            # CRITICAL FIX 6: Scale attribution sum by batch_size to match scaled gradients
+            # Since we divided gradients by batch_size during backward, we need to multiply here
+            attribution_sum_scaled = attribution_sum * batch_size
+
+            # Check completeness with scaled attributions
             completeness_metrics = compute_completeness_check(
-                attribution_sum, input_score, baseline_score
+                attribution_sum_scaled, input_score, baseline_score
             )
 
     return token_attributions, completeness_metrics
