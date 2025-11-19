@@ -1,35 +1,4 @@
 #!/bin/bash
-
-# Optimized Attribution Analysis Script
-# Uses multi-alpha batching and mixed precision for 5-30x speedup
-
-# NRMS Model - 2000 steps (OPTIMIZED - ~20-40 minutes instead of hours)
-echo "Running NRMS attribution analysis with optimizations..."
-python analyze_attributions.py \
-    --config ../configs/attribution/nrms_bert_finetune.yaml \
-    --dataset benchmark \
-    --n_samples 10000 \
-    --n_steps 2000 \
-    --top_k 20 \
-    --top_k_sample 20 \
-    --use_optimized \
-    --use_amp \
-    --alpha_batch_size 10
-
-# # NAML Model - 200 steps (OPTIMIZED - ~10-20 minutes instead of hours)
-# echo "Running NAML attribution analysis with optimizations..."
-# python analyze_attributions.py \
-#     --config ../configs/attribution/naml_bert_finetune.yaml \
-#     --dataset benchmark \
-#     --n_samples 10000 \
-#     --n_steps 200 \
-#     --top_k 20 \
-#     --top_k_sample 20 \
-#     --use_optimized \
-#     --use_amp \
-#     --alpha_batch_size 10
-
-# Example: Balanced sampling (50% fake, 50% real, randomly selected)
 # Useful for fair comparison across classes
 echo "Running with balanced sampling (50/50 fake/real)..."
 python analyze_attributions.py \
@@ -41,7 +10,21 @@ python analyze_attributions.py \
     --top_k_sample 20 \
     --use_optimized \
     --use_amp \
-    --alpha_batch_size 20 \
+    --alpha_batch_size 10 \
+    --balanced_sampling \
+    --seed 42
+
+echo "Running NAML attribution analysis with optimizations..."
+python analyze_attributions.py \
+    --config ../configs/attribution/naml_bert_finetune.yaml \
+    --dataset benchmark \
+    --n_samples 10000 \
+    --n_steps 200 \
+    --top_k 20 \
+    --top_k_sample 20 \
+    --use_optimized \
+    --use_amp \
+    --alpha_batch_size 10 \
     --balanced_sampling \
     --seed 42
 
